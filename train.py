@@ -13,6 +13,14 @@ import pytorch_ssim
 from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder, display_transform
 from loss import GeneratorLoss
 from model import Generator, Discriminator
+import wandb
+
+from torchvision.models.inception import inception_v3
+from torchvision.transforms import Resize, ToTensor, Normalize, Compose
+from torch.nn.functional import adaptive_avg_pool2d
+from scipy import linalg
+import numpy as np
+
 
 parser = argparse.ArgumentParser(description='Train Super Resolution Models')
 parser.add_argument('--crop_size', default=88, type=int, help='training images crop size')
@@ -22,8 +30,21 @@ parser.add_argument('--num_epochs', default=100, type=int, help='train epoch num
 
 
 if __name__ == '__main__':
+
+    project = "SRGAN_DL_PROJECT"
+    wandb.init(project=project)
+
     opt = parser.parse_args()
-    
+
+    wandb.config.update({
+        "crop_size": opt.crop_size,
+        "upscale_factor": opt.upscale_factor,
+        "num_epochs": opt.num_epochs,
+        "batch_size": 64,
+        "optimizer": "Adam",
+        "loss": "GeneratorLoss + Adversarial",
+    })
+
     CROP_SIZE = opt.crop_size
     UPSCALE_FACTOR = opt.upscale_factor
     NUM_EPOCHS = opt.num_epochs
@@ -111,6 +132,30 @@ if __name__ == '__main__':
             os.makedirs(out_path)
         
         with torch.no_grad():
+            train_eval_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
+            for train_lr, train_hr in tqdm(train_loader):
+                batch_size = train_lr.size(0)
+                train_eval_results['batch_sizes'] += batch_size
+                lr = train_lr
+                hr = train_hr
+                if torch.cuda.is_available():
+                    lr = lr.float().cuda()
+                    hr = hr.float().cuda()
+                sr = netG(lr)
+                batch_mse = ((sr - hr) ** 2).data.mean()
+                train_eval_results['mse'] += batch_mse * batch_size
+                batch_ssim = pytorch_ssim.ssim(sr, hr).item()
+                train_eval_results['ssims'] += batch_ssim * batch_size
+
+            train_eval_results['psnr'] = 10 * log10(
+                (hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
+            train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
+
+            results['train_psnr'].append(train_eval_results['psnr'])
+            results['train_ssim'].append(train_eval_results['ssim'])
+
+
+
             val_bar = tqdm(val_loader)
             valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
             val_images = []
@@ -154,13 +199,26 @@ if __name__ == '__main__':
         results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
         results['d_score'].append(running_results['d_score'] / running_results['batch_sizes'])
         results['g_score'].append(running_results['g_score'] / running_results['batch_sizes'])
-        results['psnr'].append(valing_results['psnr'])
-        results['ssim'].append(valing_results['ssim'])
-    
+        results['val_psnr'].append(valing_results['psnr'])
+        results['val_ssim'].append(valing_results['ssim'])
+
+        wandb.log({
+            "epoch": epoch,
+            "train/Loss_D": results['d_loss'][-1],
+            "train/Loss_G": results['g_loss'][-1],
+            "train/Score_D": results['d_score'][-1],
+            "train/Score_G": results['g_score'][-1],
+            "train/PSNR": results['train_psnr'][-1],
+            "train/SSIM": results['train_ssim'][-1],
+            "val/PSNR": results['val_psnr'][-1],
+            "val/SSIM": results['val_ssim'][-1]
+        })
+
         if epoch % 10 == 0 and epoch != 0:
             out_path = 'statistics/'
             data_frame = pd.DataFrame(
                 data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
-                      'Score_G': results['g_score'], 'PSNR': results['psnr'], 'SSIM': results['ssim']},
+                      'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
+                      'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
                 index=range(1, epoch + 1))
             data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
