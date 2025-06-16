@@ -69,7 +69,7 @@ if __name__ == '__main__':
     optimizerG = optim.Adam(netG.parameters())
     optimizerD = optim.Adam(netD.parameters())
     
-    results = {'train_d_loss': [], 'train_g_loss': [], 'train_d_score': [], 'train_g_score': [],'train_d_loss': [], 'train_g_loss': [], 'train_d_score': [], 'train_g_score': [],  'train_psnr': [], 'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
+    results = {'d_loss': [], 'g_loss': [], 'd_score': [], 'g_score': [], 'train_psnr': [], 'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
     
     for epoch in range(1, NUM_EPOCHS + 1):
         train_bar = tqdm(train_loader)
@@ -196,11 +196,14 @@ if __name__ == '__main__':
         # save model parameters
         torch.save(netG.state_dict(), 'epochs/netG_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
         torch.save(netD.state_dict(), 'epochs/netD_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
+
         # save loss\scores\psnr\ssim
         results['d_loss'].append(running_results['d_loss'] / running_results['batch_sizes'])
         results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
         results['d_score'].append(running_results['d_score'] / running_results['batch_sizes'])
         results['g_score'].append(running_results['g_score'] / running_results['batch_sizes'])
+        results['train_psnr'].append(train_eval_results['psnr'])
+        results['train_ssim'].append(train_eval_results['ssim'])
         results['val_psnr'].append(valing_results['psnr'])
         results['val_ssim'].append(valing_results['ssim'])
 
@@ -213,10 +216,10 @@ if __name__ == '__main__':
             "train/PSNR": results['train_psnr'][-1],
             "train/SSIM": results['train_ssim'][-1],
             "val/PSNR": results['val_psnr'][-1],
-            "val/SSIM": results['val_ssim'][-1]
+            "val/SSIM": results['val_ssim'][-1],
         })
 
-        if epoch % 10 == 0 and epoch != 0:
+        if epoch > 0:
             out_path = 'statistics/'
             data_frame = pd.DataFrame(
                 data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
