@@ -30,7 +30,7 @@ parser.add_argument('--num_epochs', default=100, type=int, help='train epoch num
 
 
 if __name__ == '__main__':
-
+    wandb.finish()
     project = "SRGAN_DL_PROJECT"
     wandb.init(project=project)
 
@@ -69,7 +69,7 @@ if __name__ == '__main__':
     optimizerG = optim.Adam(netG.parameters())
     optimizerD = optim.Adam(netD.parameters())
     
-    results = {'d_loss': [], 'g_loss': [], 'd_score': [], 'g_score': [], 'psnr': [], 'ssim': []}
+    results = {'train_d_loss': [], 'train_g_loss': [], 'train_d_score': [], 'train_g_score': [],'train_d_loss': [], 'train_g_loss': [], 'train_d_score': [], 'train_g_score': [],  'train_psnr': [], 'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
     
     for epoch in range(1, NUM_EPOCHS + 1):
         train_bar = tqdm(train_loader)
@@ -86,6 +86,8 @@ if __name__ == '__main__':
             # (1) Update G network: minimize 1-D(G(z)) + Perception Loss + Image Loss + TV Loss
             ###########################
             real_img = target
+            print("X size: ", data.size())
+            print("target size: ", real_img.size())
             if torch.cuda.is_available():
                 real_img = real_img.float().cuda()
             z = data
