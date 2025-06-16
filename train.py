@@ -26,11 +26,11 @@ parser = argparse.ArgumentParser(description='Train Super Resolution Models')
 parser.add_argument('--crop_size', default=88, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
-parser.add_argument('--num_epochs', default=100, type=int, help='train epoch number')
+parser.add_argument('--num_epochs', default=20, type=int, help='train epoch number')
 
 
 if __name__ == '__main__':
-    wandb.finish()
+
     project = "SRGAN_DL_PROJECT"
     wandb.init(project=project)
 
@@ -72,6 +72,7 @@ if __name__ == '__main__':
     results = {'d_loss': [], 'g_loss': [], 'd_score': [], 'g_score': [], 'train_psnr': [], 'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
     
     for epoch in range(1, NUM_EPOCHS + 1):
+
         train_bar = tqdm(train_loader)
         running_results = {'batch_sizes': 0, 'd_loss': 0, 'g_loss': 0, 'd_score': 0, 'g_score': 0}
     
@@ -207,6 +208,23 @@ if __name__ == '__main__':
         results['val_psnr'].append(valing_results['psnr'])
         results['val_ssim'].append(valing_results['ssim'])
 
+        # בחר את הדוגמה הראשונה מתוך ה-validation
+        sample_lr = val_lr[0].cpu()
+        sample_sr = sr[0].cpu()
+        sample_hr = hr[0].cpu()
+
+        # הפוך ל-wandb.Image עם caption מתאים
+        wandb_images = [
+            wandb.Image(sample_lr, caption="Low Resolution (LR)"),
+            wandb.Image(sample_sr, caption="Super Resolution (SR)"),
+            wandb.Image(sample_hr, caption="High Resolution (HR)")
+        ]
+
+        # שלח את התמונות ל־WandB
+        wandb.log({
+            "example_images": wandb_images
+        })
+
         wandb.log({
             "epoch": epoch,
             "train/Loss_D": results['d_loss'][-1],
@@ -219,11 +237,12 @@ if __name__ == '__main__':
             "val/SSIM": results['val_ssim'][-1],
         })
 
-        if epoch > 0:
-            out_path = 'statistics/'
-            data_frame = pd.DataFrame(
-                data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
-                      'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
-                      'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
-                index=range(1, epoch + 1))
-            data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
+        # if epoch % 10 == 0 and epoch != 0:
+        #     out_path = 'statistics/'
+        #     data_frame = pd.DataFrame(
+        #         data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
+        #               'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
+        #               'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
+        #         index=range(1, epoch + 1))
+        #     data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
+    wandb.finish()
