@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser(description='Test Single Image')
 parser.add_argument('--upscale_factor', default=4, type=int, help='super resolution upscale factor')
 parser.add_argument('--test_mode', default='GPU', type=str, choices=['GPU', 'CPU'], help='using GPU or CPU')
 parser.add_argument('--image_name', default='data/DIV2K_valid_HR/0804.png', type=str, help='test low resolution image name')
-parser.add_argument('--model_name', default='netG_epoch_4_10.pth', type=str, help='generator model epoch name')
+parser.add_argument('--model_name', default='netG_epoch_4_15.pth', type=str, help='generator model epoch name')
 opt = parser.parse_args()
 
 # ------------------- Setup -------------------
@@ -77,13 +77,13 @@ resized_crop = image_lr   # low-res image after downsampling
 sr_output = output_image                 # super-resolved image
 
 # Plot all three images
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+fig, axes = plt.subplots(1, 3, figsize=(20, 8))
 axes[0].imshow(original_crop)
-axes[0].set_title("Original HR Crop (1024x1024)")
+axes[0].set_title(f"Original HR Crop ({CROP_SIZE}x{CROP_SIZE})")
 axes[0].axis("off")
 
 axes[1].imshow(ToPILImage()(resized_crop.squeeze().cpu()))
-axes[1].set_title(f"Downsampled LR ({1024 // UPSCALE_FACTOR}x{1024 // UPSCALE_FACTOR})")
+axes[1].set_title(f"Downsampled LR ({CROP_SIZE // UPSCALE_FACTOR}x{CROP_SIZE // UPSCALE_FACTOR})")
 axes[1].axis("off")
 
 axes[2].imshow(sr_output)
