@@ -1,0 +1,6 @@
+*.png
+/epochs
+/wandb
+/__pycache__
+*.pyc
+/epochs2

@@ -20,13 +20,13 @@ from torchvision.transforms import Resize, ToTensor, Normalize, Compose
 from torch.nn.functional import adaptive_avg_pool2d
 from scipy import linalg
 import numpy as np
-
+from timm import create_model
 
 parser = argparse.ArgumentParser(description='Train Super Resolution Models')
-parser.add_argument('--crop_size', default=88, type=int, help='training images crop size')
+parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
-parser.add_argument('--num_epochs', default=20, type=int, help='train epoch number')
+parser.add_argument('--num_epochs', default=100, type=int, help='train epoch number')
 
 
 if __name__ == '__main__':

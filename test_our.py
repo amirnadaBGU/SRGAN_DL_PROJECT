@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser(description='Test Single Image')
 parser.add_argument('--upscale_factor', default=4, type=int, help='super resolution upscale factor')
 parser.add_argument('--test_mode', default='GPU', type=str, choices=['GPU', 'CPU'], help='using GPU or CPU')
 parser.add_argument('--image_name', default='data/DIV2K_valid_HR/0804.png', type=str, help='test low resolution image name')
-parser.add_argument('--model_name', default='netG_epoch_4_15.pth', type=str, help='generator model epoch name')
+parser.add_argument('--model_name', default='netG_epoch_4_100.pth', type=str, help='generator model epoch name')
 opt = parser.parse_args()
 
 # ------------------- Setup -------------------
@@ -33,7 +33,7 @@ UPSCALE_FACTOR = opt.upscale_factor
 USE_GPU = opt.test_mode == 'GPU'
 IMAGE_NAME = opt.image_name
 MODEL_NAME = opt.model_name
-CROP_SIZE = 88
+CROP_SIZE = 512
 
 # Release any unused memory
 gc.collect()
