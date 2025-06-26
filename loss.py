@@ -31,7 +31,8 @@ class GeneratorLoss(nn.Module):
         tvl_p = 2e-8
 
         total_loss = im_p * image_loss + al_p * adversarial_loss + pl_p * perception_loss + tvl_p * tv_loss
-        return total_loss, image_loss, adversarial_loss, perception_loss, tv_loss , im_p, al_p, pl_p, tvl_p
+        return (total_loss, image_loss,         adversarial_loss,           perception_loss,        tv_loss,
+                            im_p * image_loss , al_p * adversarial_loss,    pl_p*perception_loss,   tvl_p* tv_loss)
 
 
 class TVLoss(nn.Module):
