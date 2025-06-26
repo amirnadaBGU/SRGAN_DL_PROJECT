@@ -317,6 +317,14 @@ if __name__ == '__main__':
             "epoch": epoch,
             "train/Loss_D": results['d_loss'][-1],
             "train/Loss_G": results['g_loss'][-1],
+            "train/image_loss": results['image_loss'][-1],
+            "train/w_image_loss": results['w_image_loss'][-1],
+            "train/adversarial_loss": results['adversarial_loss'][-1],
+            "train/w_adversarial_loss": results['w_adversarial_loss'][-1],
+            "train/perception_loss": results['perception_loss'][-1],
+            "train/w_perception_loss": results['w_perception_loss'][-1],
+            "train/tv_loss": results['tv_loss'][-1],
+            "train/w_tv_loss": results['w_tv_loss'][-1],
             "train/Score_D": results['d_score'][-1],
             "train/Score_G": results['g_score'][-1],
             "train/PSNR": results['train_psnr'][-1],
@@ -325,12 +333,4 @@ if __name__ == '__main__':
             "val/SSIM": results['val_ssim'][-1],
         })
 
-        # if epoch % 10 == 0 and epoch != 0:
-        #     out_path = 'statistics/'
-        #     data_frame = pd.DataFrame(
-        #         data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
-        #               'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
-        #               'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
-        #         index=range(1, epoch + 1))
-        #     data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
     wandb.finish()
