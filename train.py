@@ -43,7 +43,7 @@ if __name__ == '__main__':
         "crop_size": opt.crop_size,
         "upscale_factor": opt.upscale_factor,
         "num_epochs": opt.num_epochs,
-        "batch_size": 64,
+        "batch_size": 1,
         "optimizer": "Adam",
         "loss": "GeneratorLoss + Adversarial",
     })
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     # Load train and validation sets:
     train_set = TrainDatasetFromFolder('data/DIV2K_train_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR)
     val_set = ValDatasetFromFolder('data/DIV2K_valid_HR', upscale_factor=UPSCALE_FACTOR)
-    train_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=64, shuffle=True)
+    train_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=1, shuffle=True)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
     # Initialize generator and discriminator networks
@@ -152,12 +152,12 @@ if __name__ == '__main__':
 
             optimizerD.step()
 
-            # loss for current batch before optimization 
+            # loss for current batch before optimization
             running_results['g_loss'] += g_loss.item() * batch_size # accumulate generator loss (total score over the epoch)
             running_results['d_loss'] += d_loss.item() * batch_size # accumulate discriminator loss (total score over the epoch)
             running_results['d_score'] += real_out.item() * batch_size # accumulate discriminator's confidence on real images (total score over the epoch)
             running_results['g_score'] += fake_out.item() * batch_size # accumulate discriminator's confidence on fake images (total score over the epoch)
-    
+
             train_bar.set_description(desc='[%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f' % (
                 epoch, NUM_EPOCHS, running_results['d_loss'] / running_results['batch_sizes'],
                 running_results['g_loss'] / running_results['batch_sizes'],
@@ -255,7 +255,7 @@ if __name__ == '__main__':
                 image = utils.make_grid(image, nrow=3, padding=5)
                 utils.save_image(image, out_path + 'epoch_%d_index_%d.png' % (epoch, index), padding=5)
                 index += 1
-    
+
         # save model parameters
         torch.save(netG.state_dict(), 'epochs/netG_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
         torch.save(netD.state_dict(), 'epochs/netD_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
