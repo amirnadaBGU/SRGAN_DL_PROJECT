@@ -15,18 +15,22 @@ class GeneratorLoss(nn.Module):
         self.tv_loss = TVLoss()
 
     def forward(self, out_labels, out_images, target_images):
-        # Adversarial Loss
+        # Adversarial Loss (average over all batch) - scalar
         adversarial_loss = torch.mean(1 - out_labels)
-        # Perception Loss
+        # Perception Loss - scalar = MSE over batch features
         perception_loss = self.mse_loss(self.loss_network(out_images), self.loss_network(target_images))
-        # Image Loss
+        # Image Loss - scalar - MSE over batch of images
         image_loss = self.mse_loss(out_images, target_images)
-        # TV Loss
+        # TV Loss - scalar
         tv_loss = self.tv_loss(out_images)
+
+        # TODO: return also single losses for documentation:
         return image_loss + 0.001 * adversarial_loss + 0.006 * perception_loss + 2e-8 * tv_loss
 
 
 class TVLoss(nn.Module):
+    # Total Variation loss:
+    # encourages smoothness by penalizing rapid changes in pixel values between neighboring pixels in the image.
     def __init__(self, tv_loss_weight=1):
         super(TVLoss, self).__init__()
         self.tv_loss_weight = tv_loss_weight
