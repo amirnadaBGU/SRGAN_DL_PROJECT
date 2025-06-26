@@ -80,7 +80,12 @@ if __name__ == '__main__':
     optimizerD = optim.Adam(netD.parameters())
 
     # Initialize results dictionary:
-    results = {'d_loss': [], 'g_loss': [], 'd_score': [], 'g_score': [], 'train_psnr': [],
+    results = {'d_loss': [], 'g_loss': [],
+               'image_loss':[],'adversarial_loss':[],
+               'perception_loss':[],'tv_loss':[],
+               'w_image_loss':[], 'w_adversarial_loss':[],
+               'w_perception_loss':[], 'w_tv_loss':[],
+               'd_score': [], 'g_score': [], 'train_psnr': [],
                'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
 
     # Training loop:
@@ -90,7 +95,13 @@ if __name__ == '__main__':
         train_bar = tqdm(train_loader)
 
         # initialize single epoch results dictionary:
-        running_results = {'batch_sizes': 0, 'd_loss': 0, 'g_loss': 0, 'd_score': 0, 'g_score': 0}
+        running_results = {'batch_sizes': 0,
+                           'd_loss': 0, 'g_loss': 0,
+                           'image_loss': 0, 'adversarial_loss': 0,
+                           'perception_loss': 0, 'tv_loss': 0,
+                           'w_image_loss': 0, 'w_adversarial_loss': 0,
+                           'w_perception_loss': 0, 'w_tv_loss': 0,
+                           'd_score': 0, 'g_score': 0}
 
         # set NetG and NetD to be trainable:
         netG.train()
