@@ -30,7 +30,6 @@ parser.add_argument('--num_epochs', default=100, type=int, help='train epoch num
 
 
 if __name__ == '__main__':
-
     # Parse learning configuration:
     opt = parser.parse_args()
 
@@ -43,9 +42,9 @@ if __name__ == '__main__':
         "crop_size": opt.crop_size,
         "upscale_factor": opt.upscale_factor,
         "num_epochs": opt.num_epochs,
-        "batch_size": 1,
+        "batch_size": 64,
         "optimizer": "Adam",
-        "loss": "GeneratorLoss + Adversarial",
+        "loss": "Multiple",
     })
 
     # Global training variables:
