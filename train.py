@@ -125,7 +125,8 @@ if __name__ == '__main__':
             # one backwards step of the generator
             optimizerG.zero_grad()
             # calls forward generator criterion
-            g_loss, image_loss, adversarial_loss, perception_loss, tv_loss , im_p, al_p, pl_p, tvl_p \
+            (g_loss, image_loss,   adversarial_loss,  perception_loss,    tv_loss ,
+                     w_image_loss, w_adversarial_loss, w_perception_loss, w_tv_loss) \
                 = generator_criterion(fake_out, fake_img, real_img)
             g_loss.backward()
             optimizerG.step()
