@@ -75,7 +75,7 @@ if __name__ == '__main__':
         generator_criterion.cuda()
 
     # Initialize Adam optimizers for both generator and discriminator
-    # TODO: can check AdanW instead of Adam
+    # TODO: can check AdamW instead of Adam
     optimizerG = optim.Adam(netG.parameters())
     optimizerD = optim.Adam(netD.parameters())
 
@@ -86,7 +86,7 @@ if __name__ == '__main__':
     # Training loop:
     for epoch in range(1, NUM_EPOCHS + 1):
 
-        # tqdm train laoder
+        # tqdm train loader
         train_bar = tqdm(train_loader)
 
         # initialize single epoch results dictionary:
@@ -125,7 +125,8 @@ if __name__ == '__main__':
             # one backwards step of the generator
             optimizerG.zero_grad()
             # calls forward generator criterion
-            g_loss = generator_criterion(fake_out, fake_img, real_img)
+            g_loss, image_loss, adversarial_loss, perception_loss, tv_loss , im_p, al_p, pl_p, tvl_p \
+                = generator_criterion(fake_out, fake_img, real_img)
             g_loss.backward()
             optimizerG.step()
 
@@ -165,33 +166,45 @@ if __name__ == '__main__':
 
         # Generator Evaluation
         netG.eval()
+
+        # TODO: Delete
         out_path = 'training_results/SRF_' + str(UPSCALE_FACTOR) + '/'
         if not os.path.exists(out_path):
             os.makedirs(out_path)
-        
+        # TODO: add validation loss metric
+
+        # When epoch is finished:
         with torch.no_grad():
+
             # Over train set
             train_eval_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
             for train_lr, train_hr in tqdm(train_loader):
                 batch_size = train_lr.size(0)
                 train_eval_results['batch_sizes'] += batch_size
-                lr = train_lr
-                hr = train_hr
+                lr = train_lr # low res images batch
+                hr = train_hr # high res images batch
                 if torch.cuda.is_available():
                     lr = lr.float().cuda()
                     hr = hr.float().cuda()
+                # Generator predict super res image
                 sr = netG(lr)
+
+                # Collect MSE over batch
                 batch_mse = ((sr - hr) ** 2).data.mean()
                 train_eval_results['mse'] += batch_mse * batch_size
+
+                # Collect SSIM over batch
                 batch_ssim = pytorch_ssim.ssim(sr, hr).item()
                 train_eval_results['ssims'] += batch_ssim * batch_size
 
+            # Calculate PSNR and SSIM for the entire epoch
             train_eval_results['psnr'] = 10 * log10(
                 (hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
             train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
 
-            results['train_psnr'].append(train_eval_results['psnr'])
-            results['train_ssim'].append(train_eval_results['ssim'])
+            # Appends psnr and ssim for train set over epoch - duplicate saving
+            # results['train_psnr'].append(train_eval_results['psnr'])
+            # results['train_ssim'].append(train_eval_results['ssim'])
 
             # Over val set
             val_bar = tqdm(val_loader)
@@ -200,24 +213,36 @@ if __name__ == '__main__':
             for val_lr, val_hr_restore, val_hr in val_bar:
                 batch_size = val_lr.size(0)
                 valing_results['batch_sizes'] += batch_size
-                lr = val_lr
-                hr = val_hr
+                lr = val_lr # low res images batch
+                hr = val_hr # high res images batch
                 if torch.cuda.is_available():
                     lr = lr.float().cuda()
                     hr = hr.float().cuda()
+                # Generator predict super res image
                 sr = netG(lr)
+
+                # Collect MSE over batch
                 batch_mse = ((sr - hr) ** 2).data.mean()
                 valing_results['mse'] += batch_mse * batch_size
+
+                # Collect SSIM over batch
                 batch_ssim = pytorch_ssim.ssim(sr, hr).item()
                 valing_results['ssims'] += batch_ssim * batch_size
 
-            # TODO: CHECK IF INPLACE
-            valing_results['psnr'] = 10 * log10((hr.max()**2) / (valing_results['mse'] / valing_results['batch_sizes']))
+            # Calculate PSNR and SSIM for the entire epoch
+            valing_results['psnr'] = 10 * log10(
+                (hr.max()**2) / (valing_results['mse'] / valing_results['batch_sizes']))
             valing_results['ssim'] = valing_results['ssims'] / valing_results['batch_sizes']
+
+            # Appends psnr and ssim for train set over epoch - duplicate saving
+            # results['val_psnr'].append(valing_results['psnr'])
+            # results['val_ssim'].append(valing_results['ssim'])
+
             val_bar.set_description(
                 desc='[converting LR images to SR images] PSNR: %.4f dB SSIM: %.4f' % (
                     valing_results['psnr'], valing_results['ssim']))
 
+            # TODO: Obsolite
             val_images.extend(
                 [display_transform()(val_hr_restore.squeeze(0)), display_transform()(hr.data.cpu().squeeze(0)),
                  display_transform()(sr.data.cpu().squeeze(0))])

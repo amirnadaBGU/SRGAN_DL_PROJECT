@@ -25,7 +25,13 @@ class GeneratorLoss(nn.Module):
         tv_loss = self.tv_loss(out_images)
 
         # TODO: return also single losses for documentation:
-        return image_loss + 0.001 * adversarial_loss + 0.006 * perception_loss + 2e-8 * tv_loss
+        im_p = 1.000
+        al_p = 0.001
+        pl_p = 0.006
+        tvl_p = 2e-8
+
+        total_loss = im_p * image_loss + al_p * adversarial_loss + pl_p * perception_loss + tvl_p * tv_loss
+        return total_loss, image_loss, adversarial_loss, perception_loss, tv_loss , im_p, al_p, pl_p, tvl_p
 
 
 class TVLoss(nn.Module):
