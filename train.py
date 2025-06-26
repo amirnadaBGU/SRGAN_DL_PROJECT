@@ -167,6 +167,14 @@ if __name__ == '__main__':
             # loss for current batch before optimization
             running_results['g_loss'] += g_loss.item() * batch_size # accumulate generator loss (total score over the epoch)
             running_results['d_loss'] += d_loss.item() * batch_size # accumulate discriminator loss (total score over the epoch)
+            running_results['image_loss'] += image_loss.item() * batch_size
+            running_results['w_image_loss'] += w_image_loss.item() * batch_size
+            running_results['adversarial_loss'] += adversarial_loss.item() * batch_size
+            running_results['w_adversarial_loss'] += w_adversarial_loss.item() * batch_size
+            running_results['perception_loss'] += perception_loss.item() * batch_size
+            running_results['w_perception_loss'] += w_perception_loss.item() * batch_size
+            running_results['tv_loss'] += tv_loss.item() * batch_size
+            running_results['w_tv_loss'] += w_tv_loss.item() * batch_size
             running_results['d_score'] += real_out.item() * batch_size # accumulate discriminator's confidence on real images (total score over the epoch)
             running_results['g_score'] += fake_out.item() * batch_size # accumulate discriminator's confidence on fake images (total score over the epoch)
 
@@ -275,6 +283,14 @@ if __name__ == '__main__':
         # save loss\scores\psnr\ssim
         results['d_loss'].append(running_results['d_loss'] / running_results['batch_sizes'])
         results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
+        results['image_loss'].append(running_results['image_loss']/running_results['batch_sizes'])
+        results['w_image_loss'].append(running_results['w_image_loss']/running_results['batch_sizes'])
+        results['adversarial_loss'].append(running_results['adversarial_loss']/running_results['batch_sizes'])
+        results['w_adversarial_loss'].append(running_results['w_adversarial_loss']/running_results['batch_sizes'])
+        results['perception_loss'].append(running_results['perception_loss']/running_results['batch_sizes'])
+        results['w_perception_loss'].append(running_results['w_perception_loss']/running_results['batch_sizes'])
+        results['tv_loss'].append(running_results['tv_loss']/running_results['batch_sizes'])
+        results['w_tv_loss'].append(running_results['w_tv_loss']/running_results['batch_sizes'])
         results['d_score'].append(running_results['d_score'] / running_results['batch_sizes'])
         results['g_score'].append(running_results['g_score'] / running_results['batch_sizes'])
         results['train_psnr'].append(train_eval_results['psnr'])
