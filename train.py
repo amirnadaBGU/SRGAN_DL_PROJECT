@@ -311,9 +311,6 @@ if __name__ == '__main__':
             wandb.Image(sample_hr, caption="High Resolution (HR)")
         ]
 
-        wandb.log({
-            "example_images": wandb_images
-        })
 
         wandb.log({
             "epoch": epoch,
@@ -333,6 +330,7 @@ if __name__ == '__main__':
             "train/SSIM": results['train_ssim'][-1],
             "val/PSNR": results['val_psnr'][-1],
             "val/SSIM": results['val_ssim'][-1],
+            "example_images": wandb_images,
         })
 
     wandb.finish()
