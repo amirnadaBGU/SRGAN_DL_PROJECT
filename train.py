@@ -14,6 +14,7 @@ from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder, display_tra
 from loss import GeneratorLoss
 from model import Generator, Discriminator
 import wandb
+import torch
 
 from torchvision.models.inception import inception_v3
 from torchvision.transforms import Resize, ToTensor, Normalize, Compose
@@ -21,6 +22,7 @@ from torch.nn.functional import adaptive_avg_pool2d
 from scipy import linalg
 import numpy as np
 from timm import create_model
+from torchmetrics.image.fid import FrechetInceptionDistance
 
 parser = argparse.ArgumentParser(description='Train Super Resolution Models')
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
@@ -85,7 +87,7 @@ if __name__ == '__main__':
                'w_image_loss':[], 'w_adversarial_loss':[],
                'w_perception_loss':[], 'w_tv_loss':[],
                'd_score': [], 'g_score': [], 'train_psnr': [],
-               'train_ssim': [], 'val_psnr': [], 'val_ssim': []}
+               'train_ssim': [], 'val_psnr': [], 'val_ssim': [], 'val_fid': []}
 
     # Training loop:
     for epoch in range(1, NUM_EPOCHS + 1):
@@ -227,10 +229,16 @@ if __name__ == '__main__':
 
             # Over val set
             val_bar = tqdm(val_loader)
-            valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
+            valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0, 'fid': 0}
 
             # TODO: Obsolite
             # val_images = []
+            real_images = []
+            generated_images = []
+
+            # Initialize FID
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            fid_metric = FrechetInceptionDistance(normalize=True).to(device)
 
             for val_lr, val_hr_restore, val_hr in val_bar:
                 batch_size = val_lr.size(0)
@@ -243,6 +251,9 @@ if __name__ == '__main__':
                 # Generator predict super res image
                 sr = netG(lr)
 
+                real_images.append(hr.cpu())
+                generated_images.append(sr.cpu())
+
                 # Collect MSE over batch
                 batch_mse = ((sr - hr) ** 2).data.mean()
                 valing_results['mse'] += batch_mse * batch_size
@@ -250,6 +261,13 @@ if __name__ == '__main__':
                 # Collect SSIM over batch
                 batch_ssim = pytorch_ssim.ssim(sr, hr).item()
                 valing_results['ssims'] += batch_ssim * batch_size
+
+                # Collect FID over batch
+                fid_metric.update(hr.to(device), real=True)
+                fid_metric.update(sr.to(device), real=False)
+
+            # Compute FID
+            valing_results['fid'] = fid_metric.compute()  # Final score – no division needed
 
             # Calculate PSNR and SSIM for the entire epoch
             valing_results['psnr'] = 10 * log10(
@@ -299,6 +317,7 @@ if __name__ == '__main__':
         results['train_ssim'].append(train_eval_results['ssim'])
         results['val_psnr'].append(valing_results['psnr'])
         results['val_ssim'].append(valing_results['ssim'])
+        results['val_fid'].append(valing_results['fid'])
 
         # Save image in wanb
         sample_lr = val_lr[0].cpu()
@@ -330,6 +349,7 @@ if __name__ == '__main__':
             "train/SSIM": results['train_ssim'][-1],
             "val/PSNR": results['val_psnr'][-1],
             "val/SSIM": results['val_ssim'][-1],
+            "val/FID": results['val_fid'][-1],
             "example_images": wandb_images,
         })
 
