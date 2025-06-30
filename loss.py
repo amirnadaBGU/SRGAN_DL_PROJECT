@@ -4,7 +4,7 @@ from torchvision.models.vgg import vgg16
 
 
 class GeneratorLoss(nn.Module):
-    def __init__(self):
+    def __init__(self,generator_only = False):
         super(GeneratorLoss, self).__init__()
         vgg = vgg16(pretrained=True)
         loss_network = nn.Sequential(*list(vgg.features)[:31]).eval()
@@ -13,6 +13,7 @@ class GeneratorLoss(nn.Module):
         self.loss_network = loss_network
         self.mse_loss = nn.MSELoss()
         self.tv_loss = TVLoss()
+        self.generator_only = generator_only
 
     def forward(self, out_labels, out_images, target_images):
         # Adversarial Loss (average over all batch) - scalar
@@ -29,8 +30,10 @@ class GeneratorLoss(nn.Module):
         al_p = 0.001
         pl_p = 0.006
         tvl_p = 2e-8
-
-        total_loss = im_p * image_loss + al_p * adversarial_loss + pl_p * perception_loss + tvl_p * tv_loss
+        if self.generator_only == True:
+            total_loss = image_loss
+        else:
+            total_loss = im_p * image_loss + al_p * adversarial_loss + pl_p * perception_loss + tvl_p * tv_loss
         return (total_loss, image_loss,         adversarial_loss,           perception_loss,        tv_loss,
                             im_p * image_loss , al_p * adversarial_loss,    pl_p*perception_loss,   tvl_p* tv_loss)
 
