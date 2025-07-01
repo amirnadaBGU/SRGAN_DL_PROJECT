@@ -2,215 +2,188 @@ import argparse
 import os
 from math import log10
 
-import pandas as pd
+import torch
 import torch.optim as optim
-import torch.utils.data
-import torchvision.utils as utils
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import pytorch_ssim
-from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder, display_transform
-from loss3 import GeneratorLoss
-from model import Generator
+from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder
+from model3 import DiffusionModel
 import wandb
 
-from torchvision.models.inception import inception_v3
-from torchvision.transforms import Resize, ToTensor, Normalize, Compose
-from torch.nn.functional import adaptive_avg_pool2d
-from scipy import linalg
-import numpy as np
-from timm import create_model
+from torchmetrics.image.fid import FrechetInceptionDistance
 
-parser = argparse.ArgumentParser(description='Train Super Resolution Models')
+parser = argparse.ArgumentParser(description='Train DDPM Super Resolution Model')
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
 parser.add_argument('--num_epochs', default=100, type=int, help='train epoch number')
+parser.add_argument('--time_steps', default=1000, type=int, help='number of diffusion steps')
+parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 
 if __name__ == '__main__':
+    # Parse learning configuration:
+    opt = parser.parse_args()
 
+    # Wandb definition:
     project = "SRGAN_DL_PROJECT"
     wandb.init(project=project)
 
-    opt = parser.parse_args()
-
+    # Wandb configuration:
     wandb.config.update({
         "crop_size": opt.crop_size,
         "upscale_factor": opt.upscale_factor,
         "num_epochs": opt.num_epochs,
-        "batch_size": 64,
+        "batch_size": opt.batch_size,
         "optimizer": "Adam",
-        "loss": "GeneratorLoss + Adversarial",
+        "loss": "DiffusionMSE",
+        "time_steps": opt.time_steps,
     })
 
+    # Global training variables:
     CROP_SIZE = opt.crop_size
     UPSCALE_FACTOR = opt.upscale_factor
     NUM_EPOCHS = opt.num_epochs
+    TIME_STEPS = opt.time_steps
+    BATCH_SIZE = opt.batch_size
 
-    train_set = TrainDatasetFromFolder('data/DIV2K_train_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR)
-    val_set = ValDatasetFromFolder('data/DIV2K_valid_HR', upscale_factor=UPSCALE_FACTOR)
-    train_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=64, shuffle=True)
+    # Load train and validation sets:
+    train_set = TrainDatasetFromFolder('data/DIV2K_train_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR, diffusion=True)
+    val_set = TrainDatasetFromFolder('data/DIV2K_valid_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR, diffusion=True)
+    train_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
-    netG = Generator(UPSCALE_FACTOR)
-    print('# generator parameters:', sum(param.numel() for param in netG.parameters()))
+    # Initialize DDPM model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    image_dims = (3, CROP_SIZE, CROP_SIZE)
+    ddpm = DiffusionModel(time_steps=TIME_STEPS, image_dims=image_dims).to(device)
+    print('# model parameters:', sum(param.numel() for param in ddpm.parameters()))
 
-    generator_criterion = GeneratorLoss()
+    # Optimizer and loss
+    optimizer = optim.Adam(ddpm.parameters())
+    criterion = torch.nn.MSELoss(reduction="mean")
 
-    if torch.cuda.is_available():
-        netG.cuda()
-        generator_criterion.cuda()
-
-    optimizerG = optim.Adam(netG.parameters())
-
-    results = {'g_loss': [], 'train_psnr': [], 'train_ssim': [],
-               'val_psnr': [], 'val_ssim': []}
+    # Results dictionary for logging
+    results = {'loss': [], 'train_psnr': [], 'train_ssim': [], 'val_psnr': [], 'val_ssim': [], 'val_fid': []}
 
     for epoch in range(1, NUM_EPOCHS + 1):
+        ddpm.train()
+        train_bar = tqdm(train_loader, desc=f"[Epoch {epoch}/{NUM_EPOCHS}]")
+        running_loss = 0.0
+        num_batches = 0
 
-        train_bar = tqdm(train_loader)
-        running_results = {'batch_sizes': 0, 'g_loss': 0, 'g_score': 0}
+        for x, y in train_bar:
+            # x: LR image (already upscaled to HR size), y: HR image
+            x, y = x.to(device).float(), y.to(device).float()
+            bs = y.shape[0]
+            ts = torch.randint(low=1, high=TIME_STEPS, size=(bs,)).to(device)
+            gamma = ddpm.alpha_hats.to(device)[ts]
+            y_noised, target_noise = ddpm.add_noise(y, ts)
+            model_input = torch.cat([x, y_noised], dim=1)
+            predicted_noise = ddpm(model_input, gamma)
+            loss = criterion(target_noise, predicted_noise)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * bs
+            num_batches += bs
+            train_bar.set_postfix(loss=loss.item())
 
-        netG.train()
-        for data, target in train_bar:
-            g_update_first = True
-            batch_size = data.size(0)
-            running_results['batch_sizes'] += batch_size
+        avg_loss = running_loss / num_batches
+        results['loss'].append(avg_loss)
 
-            ############################
-            # (1) Update G network: minimize 1-D(G(z)) + Perception Loss + Image Loss + TV Loss
-            ###########################
-            real_img = target
-            print("X size: ", data.size())
-            print("target size: ", real_img.size())
-            if torch.cuda.is_available():
-                real_img = real_img.float().cuda()
-            z = data
-            if torch.cuda.is_available():
-                z = z.float().cuda()
-            fake_img = netG(z)
+        # --------- Evaluation ---------
+        if epoch % 1  == 0:
+            ddpm.eval()
+            with torch.no_grad():
+                # Over train set
+                # train_eval_results = {'mse': 0.0, 'ssims': 0.0, 'psnr': 0.0, 'ssim': 0.0, 'batch_sizes': 0}
+                # for train_lr, train_hr in tqdm(train_loader, desc='[Train Evaluation]'):
+                #     train_lr = train_lr.to(device).float()
+                #     train_hr = train_hr.to(device).float()
+                #     # DDPM sampling: start from noise, condition on LR
+                #     y = torch.randn_like(train_hr, device=device)
+                #     for t in range(TIME_STEPS - 1, 0, -1):
+                #         alpha_t, alpha_t_hat, beta_t = ddpm.alphas[t], ddpm.alpha_hats[t], ddpm.betas[t]
+                #         t_tensor = torch.tensor([t] * train_lr.size(0), device=device).long()
+                #         pred_noise = ddpm(torch.cat([train_lr, y], dim=1), alpha_t_hat.to(device).repeat(train_lr.size(0)))
+                #         y = (torch.sqrt(1 / alpha_t)) * (y - (1 - alpha_t) / torch.sqrt(1 - alpha_t_hat) * pred_noise)
+                #         if t > 1:
+                #             noise = torch.randn_like(y)
+                #             y = y + torch.sqrt(beta_t) * noise
+                #     sr = y
+                #     batch_size = train_lr.size(0)
+                #     train_eval_results['batch_sizes'] += batch_size
+                #     batch_mse = ((sr - train_hr) ** 2).data.mean().item()
+                #     train_eval_results['mse'] += batch_mse * batch_size
+                #     batch_ssim = pytorch_ssim.ssim(sr, train_hr).item()
+                #     train_eval_results['ssims'] += batch_ssim * batch_size
+                # train_eval_results['psnr'] = 10 * log10((train_hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
+                # train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
+                # results['train_psnr'].append(train_eval_results['psnr'])
+                # results['train_ssim'].append(train_eval_results['ssim'])
 
-            optimizerG.zero_grad()
-            g_loss = generator_criterion(fake_img, real_img)
-            g_loss.backward()
-            optimizerG.step()
+                # Over val set (PSNR/SSIM/FID)
+                val_batches = list(val_loader)
+                valing_results = {'mse': 0.0, 'ssims': 0.0, 'psnr': 0.0, 'ssim': 0.0, 'batch_sizes': 0, 'fid': 0.0}
+                real_images = []
 
-            # loss for current batch before optimization
-            running_results['g_loss'] += g_loss.item() * batch_size
-
-            # train_bar.set_description(desc='[%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f' % (
-            #     epoch, NUM_EPOCHS, running_results['d_loss'] / running_results['batch_sizes'],
-            #     running_results['g_loss'] / running_results['batch_sizes'],
-            #     running_results['d_score'] / running_results['batch_sizes'],
-            #     running_results['g_score'] / running_results['batch_sizes']))
-
-        netG.eval()
-        out_path = 'training_results/SRF_' + str(UPSCALE_FACTOR) + '/'
-        if not os.path.exists(out_path):
-            os.makedirs(out_path)
-
-        with torch.no_grad():
-            train_eval_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
-            for train_lr, train_hr in tqdm(train_loader):
-                batch_size = train_lr.size(0)
-                train_eval_results['batch_sizes'] += batch_size
-                lr = train_lr
-                hr = train_hr
-                if torch.cuda.is_available():
-                    lr = lr.float().cuda()
-                    hr = hr.float().cuda()
-                sr = netG(lr)
-                batch_mse = ((sr - hr) ** 2).data.mean()
-                train_eval_results['mse'] += batch_mse * batch_size
-                batch_ssim = pytorch_ssim.ssim(sr, hr).item()
-                train_eval_results['ssims'] += batch_ssim * batch_size
-
-            train_eval_results['psnr'] = 10 * log10(
-                (hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
-            train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
-
-            results['train_psnr'].append(train_eval_results['psnr'])
-            results['train_ssim'].append(train_eval_results['ssim'])
-
-            val_bar = tqdm(val_loader)
-            valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
-            val_images = []
-            for val_lr, val_hr_restore, val_hr in val_bar:
-                batch_size = val_lr.size(0)
-                valing_results['batch_sizes'] += batch_size
-                lr = val_lr
-                hr = val_hr
-                if torch.cuda.is_available():
-                    lr = lr.float().cuda()
-                    hr = hr.float().cuda()
-                sr = netG(lr)
-
-                batch_mse = ((sr - hr) ** 2).data.mean()
-                valing_results['mse'] += batch_mse * batch_size
-                batch_ssim = pytorch_ssim.ssim(sr, hr).item()
-                valing_results['ssims'] += batch_ssim * batch_size
-                valing_results['psnr'] = 10 * log10(
-                    (hr.max() ** 2) / (valing_results['mse'] / valing_results['batch_sizes']))
+                generated_images = []
+                fid_metric = FrechetInceptionDistance(normalize=True).to(device)
+                for val_lr, val_hr in tqdm(val_batches[-2:], desc='[Val Evaluation]'):
+                    val_lr = val_lr.to(device).float()
+                    val_hr = val_hr.to(device).float()
+                    # DDPM sampling: start from noise, condition on LR
+                    y = torch.randn_like(val_hr, device=device)
+                    for t in range(TIME_STEPS - 1, 0, -1):
+                        alpha_t, alpha_t_hat, beta_t = ddpm.alphas[t], ddpm.alpha_hats[t], ddpm.betas[t]
+                        t_tensor = torch.tensor([t] * val_lr.size(0), device=device).long()
+                        pred_noise = ddpm(torch.cat([val_lr, y], dim=1), alpha_t_hat.to(device).repeat(val_lr.size(0)))
+                        y = (torch.sqrt(1 / alpha_t)) * (y - (1 - alpha_t) / torch.sqrt(1 - alpha_t_hat) * pred_noise)
+                        if t > 1:
+                            noise = torch.randn_like(y)
+                            y = y + torch.sqrt(beta_t) * noise
+                    sr = y
+                    batch_size = val_lr.size(0)
+                    valing_results['batch_sizes'] += batch_size
+                    batch_mse = ((sr - val_hr) ** 2).data.mean().item()
+                    valing_results['mse'] += batch_mse * batch_size
+                    batch_ssim = pytorch_ssim.ssim(sr, val_hr).item()
+                    valing_results['ssims'] += batch_ssim * batch_size
+                    fid_metric.update(val_hr, real=True)
+                    fid_metric.update(sr, real=False)
+                    real_images.append(val_hr.cpu())
+                    generated_images.append(sr.cpu())
+                valing_results['fid'] = fid_metric.compute().item()
+                valing_results['psnr'] = 10 * log10((val_hr.max() ** 2) / (valing_results['mse'] / valing_results['batch_sizes']))
                 valing_results['ssim'] = valing_results['ssims'] / valing_results['batch_sizes']
-                val_bar.set_description(
-                    desc='[converting LR images to SR images] PSNR: %.4f dB SSIM: %.4f' % (
-                        valing_results['psnr'], valing_results['ssim']))
+                results['val_psnr'].append(valing_results['psnr'])
+                results['val_ssim'].append(valing_results['ssim'])
+                results['val_fid'].append(valing_results['fid'])
 
-                val_images.extend(
-                    [display_transform()(val_hr_restore.squeeze(0)), display_transform()(hr.data.cpu().squeeze(0)),
-                     display_transform()(sr.data.cpu().squeeze(0))])
-            val_images = torch.stack(val_images)
-            val_images = torch.chunk(val_images, val_images.size(0) // 15)
-            val_save_bar = tqdm(val_images, desc='[saving training results]')
-            index = 1
-            for image in val_save_bar:
-                image = utils.make_grid(image, nrow=3, padding=5)
-                utils.save_image(image, out_path + 'epoch_%d_index_%d.png' % (epoch, index), padding=5)
-                index += 1
+                # Save example images to wandb
+                sample_lr = val_lr[0].cpu()
+                sample_sr = sr[0].cpu()
+                sample_hr = val_hr[0].cpu()
+                wandb_images = [
+                    wandb.Image(sample_lr, caption="Low Resolution (LR)"),
+                    wandb.Image(sample_sr, caption="Super Resolution (SR)"),
+                    wandb.Image(sample_hr, caption="High Resolution (HR)")
+                ]
 
-        # save model parameters
-        torch.save(netG.state_dict(), 'epochs3/netG_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
+                wandb.log({
+                    "epoch": epoch,
+                    "train/loss": results['loss'][-1],
+                    # "train/PSNR": results['train_psnr'][-1],
+                    # "train/SSIM": results['train_ssim'][-1],
+                    "val/PSNR": results['val_psnr'][-1],
+                    "val/SSIM": results['val_ssim'][-1],
+                    "val/FID": results['val_fid'][-1],
+                    "example_images": wandb_images,
+                })
 
-        # save loss\scores\psnr\ssim
-        results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
-        results['train_psnr'].append(train_eval_results['psnr'])
-        results['train_ssim'].append(train_eval_results['ssim'])
-        results['val_psnr'].append(valing_results['psnr'])
-        results['val_ssim'].append(valing_results['ssim'])
+            # Save model checkpoint
+            torch.save(ddpm.state_dict(), f'epochs3/ddpm_epoch_{UPSCALE_FACTOR}_{epoch}.pth')
 
-        # בחר את הדוגמה הראשונה מתוך ה-validation
-        sample_lr = val_lr[0].cpu()
-        sample_sr = sr[0].cpu()
-        sample_hr = hr[0].cpu()
-
-        # הפוך ל-wandb.Image עם caption מתאים
-        wandb_images = [
-            wandb.Image(sample_lr, caption="Low Resolution (LR)"),
-            wandb.Image(sample_sr, caption="Super Resolution (SR)"),
-            wandb.Image(sample_hr, caption="High Resolution (HR)")
-        ]
-
-        # שלח את התמונות ל־WandB
-        wandb.log({
-            "example_images": wandb_images
-        })
-
-        wandb.log({
-            "epoch": epoch,
-            "train/Loss_G": results['g_loss'][-1],
-            "train/PSNR": results['train_psnr'][-1],
-            "train/SSIM": results['train_ssim'][-1],
-            "val/PSNR": results['val_psnr'][-1],
-            "val/SSIM": results['val_ssim'][-1],
-        })
-
-        # if epoch % 10 == 0 and epoch != 0:
-        #     out_path = 'statistics/'
-        #     data_frame = pd.DataFrame(
-        #         data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
-        #               'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
-        #               'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
-        #         index=range(1, epoch + 1))
-        #     data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
     wandb.finish()
