@@ -30,7 +30,6 @@ if __name__ == '__main__':
     project = "SRGAN_DL_PROJECT"
     wandb.init(project=project)
 
-
     # Global training variables:
     CROP_SIZE = opt.crop_size
     UPSCALE_FACTOR = opt.upscale_factor
@@ -50,7 +49,6 @@ if __name__ == '__main__':
     ddpm = DiffusionModel(time_steps=TIME_STEPS, image_dims=image_dims).to(device)
     num_params = sum(param.numel() for param in ddpm.parameters())
     print('# model parameters:', num_params)
-
 
     # Wandb configuration:
     wandb.config.update({
