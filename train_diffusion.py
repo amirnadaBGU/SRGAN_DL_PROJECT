@@ -25,6 +25,7 @@ from timm import create_model
 from torchmetrics.image.fid import FrechetInceptionDistance
 from model_diffusion import DiffusionModel, Discriminator, sample
 from torch.utils.data import Subset
+import cProfile
 
 parser = argparse.ArgumentParser(description='Train Super Resolution Models')
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
@@ -32,7 +33,7 @@ parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
 parser.add_argument('--num_epochs', default=200, type=int, help='train epoch number')
 parser.add_argument('--time_steps', default=20, type=int, help='number of diffusion steps')
-parser.add_argument('--batch_size', default=8, type=int, help='batch size')
+parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 
 
 if __name__ == '__main__':
@@ -40,8 +41,9 @@ if __name__ == '__main__':
     opt = parser.parse_args()
 
     # Wandb definition:
+    wandb.login(key="68591fc7177da3394b90d1c3d2ef0183d85215ab")
     project = "SRGAN_DL_PROJECT"
-    wandb.init(project=project)
+    wandb.init(project=project,entity="ycohen233-ben-gurion-university-of-the-negev")
 
     # Wandb configuration::
     wandb.config.update({
@@ -65,8 +67,8 @@ if __name__ == '__main__':
     train_set = TrainDatasetFromFolder('data/DIV2K_train_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR, diffusion=True)
     val_set = TrainDatasetFromFolder('data/DIV2K_valid_HR', crop_size=CROP_SIZE, upscale_factor=UPSCALE_FACTOR, diffusion=True, val=True)
     # take only the first image of the validation set
-    val_set = Subset(val_set, [0,1])
-    train_set = Subset(train_set, [0,1])
+    # val_set = Subset(val_set, [0,1])
+    # train_set = Subset(train_set, [0,1])
     train_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(dataset=val_set, num_workers=4, batch_size=1, shuffle=False)
 
@@ -78,14 +80,14 @@ if __name__ == '__main__':
     print('# discriminator parameters:', sum(param.numel() for param in netD.parameters()))
 
 
-    # Load pretrained generator weights if available
-    pretrained_path = 'epochs3/ddpm_epoch_4_320.pth'
-    if os.path.exists(pretrained_path):
-        state_dict = torch.load(pretrained_path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
-        netG.load_state_dict(state_dict)
-        print(f'Loaded pretrained generator weights from {pretrained_path}')
-    else:
-        print(f'No pretrained generator weights found at {pretrained_path}, training from scratch.')
+    # # Load pretrained generator weights if available
+    # pretrained_path = 'epochs3/ddpm_epoch_4_320.pth'
+    # if os.path.exists(pretrained_path):
+    #     state_dict = torch.load(pretrained_path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
+    #     netG.load_state_dict(state_dict)
+    #     print(f'Loaded pretrained generator weights from {pretrained_path}')
+    # else:
+    #     print(f'No pretrained generator weights found at {pretrained_path}, training from scratch.')
 
     # Initialize GeneratorLoss class as generator_criterion
     generator_criterion = GeneratorLoss()
@@ -111,6 +113,9 @@ if __name__ == '__main__':
 
     # Training loop:
     for epoch in range(1, NUM_EPOCHS + 1):
+
+        pr = cProfile.Profile()
+        pr.enable()
 
         # tqdm train loader
         train_bar = tqdm(train_loader)
@@ -140,7 +145,27 @@ if __name__ == '__main__':
                 z = z.float().cuda()
 
             # generates high resolution image with generator
-            fake_img = sample(netG, z)
+
+            # fake_img = sample(netG, z)
+
+            # ======= 1. Pick random timesteps for batch
+            bs = real_img.size(0)
+            t = torch.randint(1, TIME_STEPS, (bs,), device=real_img.device)
+            # ======= 2. Add noise to HR at step t
+            gamma = netG.alpha_hats.to(real_img.device)[t]
+            noisy_img, target_noise = netG.add_noise(real_img, t)
+
+            # ======= 3. Denoise one step (like DDPM), condition on z
+            # UNet expects [concat LR, noised HR] and gamma
+            model_input = torch.cat([z, noisy_img], dim=1)
+            predicted_noise = netG(model_input, gamma)
+            # You can produce a denoised image: (DDPM update, or just predicted clean image)
+            # Denoised estimate: x_start = noisy_img - predicted_noise * sqrt(1-alpha_hat)  (see your add_noise, match it)
+            # Here, let's do:
+            # If your UNet predicts pure noise:
+            alpha_hat = netG.alpha_hats.to(real_img.device)[t].view(-1, 1, 1, 1)
+            denoised_img = (noisy_img - (1 - alpha_hat).sqrt() * predicted_noise) / alpha_hat.sqrt()
+            fake_img = denoised_img
 
             # returns average classification score for the batch:
             fake_out = netD(fake_img).mean()
@@ -181,146 +206,150 @@ if __name__ == '__main__':
                 running_results['d_score'] / running_results['batch_sizes'],
                 running_results['g_score'] / running_results['batch_sizes']))
 
+        pr.disable()
+        pr.print_stats(sort='cumtime')
+
         # Generator Evaluation
-        netG.eval()
+        if epoch % 10 == 0:
+            netG.eval()
 
-        # TODO: Delete
-        out_path = 'training_results/SRF_' + str(UPSCALE_FACTOR) + '/'
-        if not os.path.exists(out_path):
-            os.makedirs(out_path)
-        # TODO: add validation loss metric
+            # TODO: Delete
+            out_path = 'training_results/SRF_' + str(UPSCALE_FACTOR) + '/'
+            if not os.path.exists(out_path):
+                os.makedirs(out_path)
+            # TODO: add validation loss metric
 
-        # # When epoch is finished:
-        with torch.no_grad():
+            # # When epoch is finished:
+            with torch.no_grad():
 
-        #     # Over train set
-        #     train_eval_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
-        #     for train_lr, train_hr in tqdm(train_loader):
-        #         batch_size = train_lr.size(0)
-        #         train_eval_results['batch_sizes'] += batch_size
-        #         lr = train_lr
-        #         hr = train_hr
-        #         if torch.cuda.is_available():
-        #             lr = lr.float().cuda()
-        #             hr = hr.float().cuda()
+            #     # Over train set
+            #     train_eval_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0}
+            #     for train_lr, train_hr in tqdm(train_loader):
+            #         batch_size = train_lr.size(0)
+            #         train_eval_results['batch_sizes'] += batch_size
+            #         lr = train_lr
+            #         hr = train_hr
+            #         if torch.cuda.is_available():
+            #             lr = lr.float().cuda()
+            #             hr = hr.float().cuda()
 
-        #         sr = sample(netG, lr)
+            #         sr = sample(netG, lr)
 
-        #         # Collect MSE over batch
-        #         batch_mse = ((sr - hr) ** 2).data.mean()
-        #         train_eval_results['mse'] += batch_mse * batch_size
+            #         # Collect MSE over batch
+            #         batch_mse = ((sr - hr) ** 2).data.mean()
+            #         train_eval_results['mse'] += batch_mse * batch_size
 
-        #         batch_ssim = pytorch_ssim.ssim(sr, hr).item()
-        #         train_eval_results['ssims'] += batch_ssim * batch_size
+            #         batch_ssim = pytorch_ssim.ssim(sr, hr).item()
+            #         train_eval_results['ssims'] += batch_ssim * batch_size
 
-        #     # Calculate PSNR and SSIM for the entire epoch
-        #     train_eval_results['psnr'] = 10 * log10(
-        #         (hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
-        #     train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
-
-
-            # Over val set
-            val_bar = tqdm(val_loader)
-            valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0, 'fid': 0}
+            #     # Calculate PSNR and SSIM for the entire epoch
+            #     train_eval_results['psnr'] = 10 * log10(
+            #         (hr.max() ** 2) / (train_eval_results['mse'] / train_eval_results['batch_sizes']))
+            #     train_eval_results['ssim'] = train_eval_results['ssims'] / train_eval_results['batch_sizes']
 
 
-            # Initialize FID
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            fid_metric = FrechetInceptionDistance(normalize=True).to(device)
+                # Over val set
+                val_bar = tqdm(val_loader)
+                valing_results = {'mse': 0, 'ssims': 0, 'psnr': 0, 'ssim': 0, 'batch_sizes': 0, 'fid': 0}
 
 
-            for val_lr, val_hr in val_bar:
-                batch_size = val_lr.size(0)
-                valing_results['batch_sizes'] += batch_size
-                lr = val_lr
-                hr = val_hr
-                if torch.cuda.is_available():
-                    lr = lr.float().cuda()
-                    hr = hr.float().cuda()
-                sr = sample(netG, lr, val=True)
-
-                # Collect MSE over batch
-                batch_mse = ((sr - hr) ** 2).data.mean()
-                valing_results['mse'] += batch_mse * batch_size
-
-                # Collect SSIM over batch
-                batch_ssim = pytorch_ssim.ssim(sr, hr).item()
-                valing_results['ssims'] += batch_ssim * batch_size
-
-                # Collect FID over batch
-                fid_metric.update(hr.to(device), real=True)
-                fid_metric.update(sr.to(device), real=False)
-
-            # Compute FID
-            valing_results['fid'] = fid_metric.compute()  # Final score – no division needed
-
-            # Calculate PSNR and SSIM for the entire epoch
-            valing_results['psnr'] = 10 * log10(
-                (hr.max()**2) / (valing_results['mse'] / valing_results['batch_sizes']))
-            valing_results['ssim'] = valing_results['ssims'] / valing_results['batch_sizes']
+                # Initialize FID
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                fid_metric = FrechetInceptionDistance(normalize=True).to(device)
 
 
-            val_bar.set_description(
-                desc='[converting LR images to SR images] PSNR: %.4f dB SSIM: %.4f' % (
-                    valing_results['psnr'], valing_results['ssim']))
+                for val_lr, val_hr in val_bar:
+                    batch_size = val_lr.size(0)
+                    valing_results['batch_sizes'] += batch_size
+                    lr = val_lr
+                    hr = val_hr
+                    if torch.cuda.is_available():
+                        lr = lr.float().cuda()
+                        hr = hr.float().cuda()
+                    sr = sample(netG, lr, val=True)
+
+                    # Collect MSE over batch
+                    batch_mse = ((sr - hr) ** 2).data.mean()
+                    valing_results['mse'] += batch_mse * batch_size
+
+                    # Collect SSIM over batch
+                    batch_ssim = pytorch_ssim.ssim(sr, hr).item()
+                    valing_results['ssims'] += batch_ssim * batch_size
+
+                    # Collect FID over batch
+                    fid_metric.update(hr.to(device), real=True)
+                    fid_metric.update(sr.to(device), real=False)
+
+                # Compute FID
+                valing_results['fid'] = fid_metric.compute()  # Final score – no division needed
+
+                # Calculate PSNR and SSIM for the entire epoch
+                valing_results['psnr'] = 10 * log10(
+                    (hr.max()**2) / (valing_results['mse'] / valing_results['batch_sizes']))
+                valing_results['ssim'] = valing_results['ssims'] / valing_results['batch_sizes']
+
+
+                val_bar.set_description(
+                    desc='[converting LR images to SR images] PSNR: %.4f dB SSIM: %.4f' % (
+                        valing_results['psnr'], valing_results['ssim']))
 
 
 
-        # save model parameters
-        torch.save(netG.state_dict(), 'epochs/netG_diffusion_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
-        torch.save(netD.state_dict(), 'epochs/netD_diffusion_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
+            # save model parameters
+            torch.save(netG.state_dict(), 'epochs/netG_diffusion_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
+            torch.save(netD.state_dict(), 'epochs/netD_diffusion_epoch_%d_%d.pth' % (UPSCALE_FACTOR, epoch))
 
-        # save loss\scores\psnr\ssim
-        results['d_loss'].append(running_results['d_loss'] / running_results['batch_sizes'])
-        results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
-        results['image_loss'].append(running_results['image_loss']/running_results['batch_sizes'])
-        results['w_image_loss'].append(running_results['w_image_loss']/running_results['batch_sizes'])
-        results['adversarial_loss'].append(running_results['adversarial_loss']/running_results['batch_sizes'])
-        results['w_adversarial_loss'].append(running_results['w_adversarial_loss']/running_results['batch_sizes'])
-        results['perception_loss'].append(running_results['perception_loss']/running_results['batch_sizes'])
-        results['w_perception_loss'].append(running_results['w_perception_loss']/running_results['batch_sizes'])
-        results['tv_loss'].append(running_results['tv_loss']/running_results['batch_sizes'])
-        results['w_tv_loss'].append(running_results['w_tv_loss']/running_results['batch_sizes'])
-        results['d_score'].append(running_results['d_score'] / running_results['batch_sizes'])
-        results['g_score'].append(running_results['g_score'] / running_results['batch_sizes'])
-        # results['train_psnr'].append(train_eval_results['psnr'])
-        # results['train_ssim'].append(train_eval_results['ssim'])
-        results['val_psnr'].append(valing_results['psnr'])
-        results['val_ssim'].append(valing_results['ssim'])
-        results['val_fid'].append(valing_results['fid'])
+            # save loss\scores\psnr\ssim
+            results['d_loss'].append(running_results['d_loss'] / running_results['batch_sizes'])
+            results['g_loss'].append(running_results['g_loss'] / running_results['batch_sizes'])
+            results['image_loss'].append(running_results['image_loss']/running_results['batch_sizes'])
+            results['w_image_loss'].append(running_results['w_image_loss']/running_results['batch_sizes'])
+            results['adversarial_loss'].append(running_results['adversarial_loss']/running_results['batch_sizes'])
+            results['w_adversarial_loss'].append(running_results['w_adversarial_loss']/running_results['batch_sizes'])
+            results['perception_loss'].append(running_results['perception_loss']/running_results['batch_sizes'])
+            results['w_perception_loss'].append(running_results['w_perception_loss']/running_results['batch_sizes'])
+            results['tv_loss'].append(running_results['tv_loss']/running_results['batch_sizes'])
+            results['w_tv_loss'].append(running_results['w_tv_loss']/running_results['batch_sizes'])
+            results['d_score'].append(running_results['d_score'] / running_results['batch_sizes'])
+            results['g_score'].append(running_results['g_score'] / running_results['batch_sizes'])
+            # results['train_psnr'].append(train_eval_results['psnr'])
+            # results['train_ssim'].append(train_eval_results['ssim'])
+            results['val_psnr'].append(valing_results['psnr'])
+            results['val_ssim'].append(valing_results['ssim'])
+            results['val_fid'].append(valing_results['fid'])
 
-        # Save image in wanb
-        sample_lr = val_lr[0].cpu()
-        sample_sr = sr[0].cpu()
-        sample_hr = hr[0].cpu()
+            # Save image in wanb
+            sample_lr = val_lr[0].cpu()
+            sample_sr = sr[0].cpu()
+            sample_hr = hr[0].cpu()
 
-        wandb_images = [
-            wandb.Image(sample_lr, caption="Low Resolution (LR)"),
-            wandb.Image(sample_sr, caption="Super Resolution (SR)"),
-            wandb.Image(sample_hr, caption="High Resolution (HR)")
-        ]
+            wandb_images = [
+                wandb.Image(sample_lr, caption="Low Resolution (LR)"),
+                wandb.Image(sample_sr, caption="Super Resolution (SR)"),
+                wandb.Image(sample_hr, caption="High Resolution (HR)")
+            ]
 
 
-        wandb.log({
-            "epoch": epoch,
-            "train/Loss_D": results['d_loss'][-1],
-            "train/Loss_G": results['g_loss'][-1],
-            "train/image_loss": results['image_loss'][-1],
-            "train/w_image_loss": results['w_image_loss'][-1],
-            "train/adversarial_loss": results['adversarial_loss'][-1],
-            "train/w_adversarial_loss": results['w_adversarial_loss'][-1],
-            "train/perception_loss": results['perception_loss'][-1],
-            "train/w_perception_loss": results['w_perception_loss'][-1],
-            "train/tv_loss": results['tv_loss'][-1],
-            "train/w_tv_loss": results['w_tv_loss'][-1],
-            "train/Score_D": results['d_score'][-1],
-            "train/Score_G": results['g_score'][-1],
-            # "train/PSNR": results['train_psnr'][-1],
-            # "train/SSIM": results['train_ssim'][-1],
-            "val/PSNR": results['val_psnr'][-1],
-            "val/SSIM": results['val_ssim'][-1],
-            "val/FID": results['val_fid'][-1],
-            "example_images": wandb_images,
-        })
+            wandb.log({
+                "epoch": epoch,
+                "train/Loss_D": results['d_loss'][-1],
+                "train/Loss_G": results['g_loss'][-1],
+                "train/image_loss": results['image_loss'][-1],
+                "train/w_image_loss": results['w_image_loss'][-1],
+                "train/adversarial_loss": results['adversarial_loss'][-1],
+                "train/w_adversarial_loss": results['w_adversarial_loss'][-1],
+                "train/perception_loss": results['perception_loss'][-1],
+                "train/w_perception_loss": results['w_perception_loss'][-1],
+                "train/tv_loss": results['tv_loss'][-1],
+                "train/w_tv_loss": results['w_tv_loss'][-1],
+                "train/Score_D": results['d_score'][-1],
+                "train/Score_G": results['g_score'][-1],
+                # "train/PSNR": results['train_psnr'][-1],
+                # "train/SSIM": results['train_ssim'][-1],
+                "val/PSNR": results['val_psnr'][-1],
+                "val/SSIM": results['val_ssim'][-1],
+                "val/FID": results['val_fid'][-1],
+                "example_images": wandb_images,
+            })
 
     wandb.finish()
