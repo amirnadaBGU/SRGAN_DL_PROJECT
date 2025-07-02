@@ -18,8 +18,8 @@ parser = argparse.ArgumentParser(description='Train DDPM Super Resolution Model'
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
-parser.add_argument('--num_epochs', default=100, type=int, help='train epoch number')
-parser.add_argument('--time_steps', default=1000, type=int, help='number of diffusion steps')
+parser.add_argument('--num_epochs', default=1000, type=int, help='train epoch number')
+parser.add_argument('--time_steps', default=2000, type=int, help='number of diffusion steps')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 
 if __name__ == '__main__':
@@ -30,16 +30,6 @@ if __name__ == '__main__':
     project = "SRGAN_DL_PROJECT"
     wandb.init(project=project)
 
-    # Wandb configuration:
-    wandb.config.update({
-        "crop_size": opt.crop_size,
-        "upscale_factor": opt.upscale_factor,
-        "num_epochs": opt.num_epochs,
-        "batch_size": opt.batch_size,
-        "optimizer": "Adam",
-        "loss": "DiffusionMSE",
-        "time_steps": opt.time_steps,
-    })
 
     # Global training variables:
     CROP_SIZE = opt.crop_size
@@ -56,9 +46,24 @@ if __name__ == '__main__':
 
     # Initialize DDPM model
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(" device: ", device)
     image_dims = (3, CROP_SIZE, CROP_SIZE)
     ddpm = DiffusionModel(time_steps=TIME_STEPS, image_dims=image_dims).to(device)
-    print('# model parameters:', sum(param.numel() for param in ddpm.parameters()))
+    num_params = sum(param.numel() for param in ddpm.parameters())
+    print('# model parameters:', num_params)
+
+
+    # Wandb configuration:
+    wandb.config.update({
+        "crop_size": opt.crop_size,
+        "upscale_factor": opt.upscale_factor,
+        "num_epochs": opt.num_epochs,
+        "batch_size": opt.batch_size,
+        "optimizer": "Adam",
+        "loss": "DiffusionMSE",
+        "time_steps": opt.time_steps,
+        "num_params": num_params,
+    })
 
     # Optimizer and loss
     optimizer = optim.Adam(ddpm.parameters())
@@ -94,7 +99,7 @@ if __name__ == '__main__':
         results['loss'].append(avg_loss)
 
         # --------- Evaluation ---------
-        if epoch % 1  == 0:
+        if epoch % 10  == 0:
             ddpm.eval()
             with torch.no_grad():
                 # Over train set
@@ -131,7 +136,7 @@ if __name__ == '__main__':
 
                 generated_images = []
                 fid_metric = FrechetInceptionDistance(normalize=True).to(device)
-                for val_lr, val_hr in tqdm(val_batches[-2:], desc='[Val Evaluation]'):
+                for val_lr, val_hr in tqdm(val_batches[-50:], desc='[Val Evaluation]'):
                     val_lr = val_lr.to(device).float()
                     val_hr = val_hr.to(device).float()
                     # DDPM sampling: start from noise, condition on LR
