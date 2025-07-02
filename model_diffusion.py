@@ -1,184 +1,214 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import spectral_norm
-import math
+from math import log
+from time import time
+import numpy as np
 
-# --- ResNet Block ---
-class ResBlock(nn.Module):
-    def __init__(self, channels, time_emb_dim=None):
+def cosine_beta_schedule(timesteps, s=0.008):
+    steps = timesteps + 1
+    x = np.linspace(0, timesteps, steps)
+    alphas_cumprod = np.cos(((x / timesteps) + s) / (1 + s) * np.pi * 0.5) ** 2
+    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+    return torch.from_numpy(np.clip(betas, 0.0001, 0.9999)).float()
+
+class UNet(nn.Module):
+    def __init__(self, input_channels = 3, output_channels = 3, time_steps = 512):
         super().__init__()
-        self.norm1 = nn.GroupNorm(32, channels)
-        self.act1 = nn.SiLU()
-        self.conv1 = spectral_norm(nn.Conv2d(channels, channels, 3, padding=1))
-        self.norm2 = nn.GroupNorm(32, channels)
-        self.act2 = nn.SiLU()
-        self.conv2 = spectral_norm(nn.Conv2d(channels, channels, 3, padding=1))
-        self.time_emb_proj = nn.Linear(time_emb_dim, channels) if time_emb_dim is not None else None
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+        self.time_steps = time_steps
+        self.time_steps = time_steps
+        
+        self.e1 = encoder_block(self.input_channels, 64, time_steps=self.time_steps)
+        self.e2 = encoder_block(64, 128, time_steps=self.time_steps)
+        # self.da2 = AttnBlock(128)
+        self.e3 = encoder_block(128, 256, time_steps=self.time_steps)
+        self.da3 = AttnBlock(256)
+        self.e4 = encoder_block(256, 512, time_steps=self.time_steps)
+        self.da4 = AttnBlock(512)
+        
+        self.b = conv_block(512, 1024, time_steps=self.time_steps) # bottleneck
+        self.ba1 = AttnBlock(1024)
+        self.d1 = decoder_block(1024, 512, time_steps=self.time_steps)
+        self.ua1 = AttnBlock(512)
+        self.d2 = decoder_block(512, 256, time_steps=self.time_steps)
+        self.ua2 = AttnBlock(256)
+        self.d3 = decoder_block(256, 128, time_steps=self.time_steps)
+        # self.ua3 = AttnBlock(128)
+        self.d4 = decoder_block(128, 64, time_steps=self.time_steps)
+        # self.ua4 = AttnBlock(64)
+        self.outputs = nn.Conv2d(64, self.output_channels, kernel_size=1, padding=0)
 
-    def forward(self, x, t_emb=None):
-        h = self.act1(self.norm1(x))
-        h = self.conv1(h)
-        if self.time_emb_proj is not None and t_emb is not None:
-            h = h + self.time_emb_proj(t_emb)[:, :, None, None]
-        h = self.act2(self.norm2(h))
-        h = self.conv2(h)
-        return (x + h) / math.sqrt(2)
+    def forward(self, inputs, t = None):
+        # downsampling block
+        s1, p1 = self.e1(inputs, t)
+        s2, p2 = self.e2(p1, t)
+        s3, p3 = self.e3(p2, t)
+        p3 = self.da3(p3)
+        s4, p4 = self.e4(p3, t)
+        p4 = self.da4(p4)
+        # bottleneck
+        b = self.b(p4, t)
+        b = self.ba1(b)
+        # upsampling block
+        d1 = self.d1(b, s4, t)
+        d1 = self.ua1(d1)
+        d2 = self.d2(d1, s3, t)
+        d2 = self.ua2(d2)
+        d3 = self.d3(d2, s2, t)
+        d4 = self.d4(d3, s1, t)
+        outputs = self.outputs(d4)
+        return outputs
 
-# --- Self-Attention Block ---
-class SelfAttention2d(nn.Module):
-    def __init__(self, channels):
+
+class AttnBlock(nn.Module):
+    def __init__(self, embedding_dims, num_heads = 4) -> None:
         super().__init__()
-        self.norm = nn.GroupNorm(32, channels)
-        self.q = spectral_norm(nn.Conv2d(channels, channels, 1))
-        self.k = spectral_norm(nn.Conv2d(channels, channels, 1))
-        self.v = spectral_norm(nn.Conv2d(channels, channels, 1))
-        self.proj = spectral_norm(nn.Conv2d(channels, channels, 1))
-
+        
+        self.embedding_dims = embedding_dims
+        self.ln = nn.LayerNorm(embedding_dims)
+        self.mhsa = MultiHeadSelfAttention(embedding_dims = embedding_dims, num_heads = num_heads)
+        self.ff = nn.Sequential(
+            nn.LayerNorm(self.embedding_dims),
+            nn.Linear(self.embedding_dims, self.embedding_dims),
+            nn.GELU(),
+            nn.Linear(self.embedding_dims, self.embedding_dims),
+        )
     def forward(self, x):
-        B, C, H, W = x.shape
-        h = self.norm(x)
-        q = self.q(h).reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
-        k = self.k(h).reshape(B, C, H * W)                   # (B, C, HW)
-        v = self.v(h).reshape(B, C, H * W).permute(0, 2, 1)  # (B, HW, C)
-        attn = torch.softmax(q @ k / (C ** 0.5), dim=-1)     # (B, HW, HW)
-        out = attn @ v                                       # (B, HW, C)
-        out = out.permute(0, 2, 1).reshape(B, C, H, W)
-        return (x + self.proj(out)) / math.sqrt(2)
+        bs, c, sz, _ = x.shape
+        x = x.view(-1, self.embedding_dims, sz * sz).swapaxes(1, 2) # is of the shape (bs, sz**2, self.embedding_dims)
+        x_ln = self.ln(x)
+        _, attention_value = self.mhsa(x_ln, x_ln, x_ln)
+        attention_value = attention_value + x
+        attention_value = self.ff(attention_value) + attention_value
+        return attention_value.swapaxes(2, 1).view(-1, c, sz, sz)
 
-# --- Sinusoidal Time Embedding ---
-def get_timestep_embedding(timesteps, embedding_dim):
-    half_dim = embedding_dim // 2
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=timesteps.device) * -(torch.log(torch.tensor(10000.0)) / half_dim))
-    emb = timesteps.float()[:, None] * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
-        emb = F.pad(emb, (0,1,0,0))
-    return emb
-
-# --- Down/Up Blocks for U-Net ---
-class DownBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, num_res_blocks, time_emb_dim, attn=False):
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, embedding_dims, num_heads = 4) -> None:
         super().__init__()
-        self.conv_in = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.resblocks = nn.ModuleList([ResBlock(out_ch, time_emb_dim) for _ in range(num_res_blocks)])
-        self.attn = SelfAttention2d(out_ch) if attn else nn.Identity()
+        self.embedding_dims = embedding_dims
+        self.num_heads = num_heads
+        assert self.embedding_dims % self.num_heads == 0, f"{self.embedding_dims} not divisible by {self.num_heads}"
+        self.head_dim = self.embedding_dims // self.num_heads
+        self.wq = nn.Linear(self.head_dim, self.head_dim)
+        self.wk = nn.Linear(self.head_dim, self.head_dim)
+        self.wv = nn.Linear(self.head_dim, self.head_dim)
+        self.wo = nn.Linear(self.embedding_dims, self.embedding_dims)
 
-    def forward(self, x, t_emb):
-        h = self.conv_in(x)
-        for block in self.resblocks:
-            h = block(h, t_emb)
-        h = self.attn(h)
-        return h
+    def attention(self, q, k, v):
+        # no need for a mask
+        attn_weights = F.softmax((q @ k.transpose(-1, -2))/self.head_dim**0.5, dim = -1)
+        return attn_weights, attn_weights @ v        
 
-class UpBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, num_res_blocks, time_emb_dim, attn=False):
+    def forward(self, q, k, v):
+        bs, img_sz, c = q.shape
+        q = q.view(bs, img_sz, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(bs, img_sz, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(bs, img_sz, self.num_heads, self.head_dim).transpose(1, 2)
+        # q, k, v of the shape (bs, self.num_heads, img_sz**2, self.head_dim)
+        q = self.wq(q)
+        k = self.wk(k)
+        v = self.wv(v)
+        attn_weights, o = self.attention(q, k, v) # of shape (bs, num_heads, img_sz**2, c)
+        
+        o = o.transpose(1, 2).contiguous().view(bs, img_sz, self.embedding_dims)
+        o = self.wo(o)
+        return attn_weights, o
+
+
+# Encoder Block for downsampling
+class encoder_block(nn.Module):
+    def __init__(self, in_c, out_c, time_steps, activation = "relu"):
         super().__init__()
-        self.conv_in = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-        self.resblocks = nn.ModuleList([ResBlock(out_ch, time_emb_dim) for _ in range(num_res_blocks)])
-        self.attn = SelfAttention2d(out_ch) if attn else nn.Identity()
+        self.conv = conv_block(in_c, out_c, time_steps = time_steps, activation = activation, embedding_dims = out_c)
+        self.pool = nn.MaxPool2d((2, 2))
 
-    def forward(self, x, t_emb):
-        h = self.conv_in(x)
-        for block in self.resblocks:
-            h = block(h, t_emb)
-        h = self.attn(h)
-        return h
+    def forward(self, inputs, time = None):
+        x = self.conv(inputs, time)
+        p = self.pool(x)
+        return x, p
 
-# --- SR3-like U-Net ---
-class SR3UNet(nn.Module):
-    def __init__(
-        self,
-        in_channels=6,  # noisy HR + upsampled LR
-        out_channels=3,
-        base_channels=128,
-        channel_mults=(1, 2, 4, 8, 8),
-        num_res_blocks=3,
-        attn_resolutions=(16,),  # Only at 16x16
-        time_emb_dim=512
-    ):
+# Decoder Block for upsampling
+class decoder_block(nn.Module):
+    def __init__(self, in_c, out_c, time_steps, activation = "relu"):
         super().__init__()
-        self.time_mlp = nn.Sequential(
-            nn.Linear(time_emb_dim, time_emb_dim * 4),
-            nn.SiLU(),
-            nn.Linear(time_emb_dim * 4, time_emb_dim)
-        )
+        self.up = nn.ConvTranspose2d(in_c, out_c, kernel_size=2, stride=2, padding=0)
+        self.conv = conv_block(out_c+out_c, out_c, time_steps = time_steps, activation = activation, embedding_dims = out_c)
+    def forward(self, inputs, skip, time = None):
+        x = self.up(inputs)
+        x = torch.cat([x, skip], axis=1)
+        x = self.conv(x, time)
+        return x
 
-        # Downsampling
-        self.downs = nn.ModuleList()
-        channels = [base_channels * m for m in channel_mults]
-        in_ch = in_channels
-        for i, ch in enumerate(channels):
-            attn = 2**(len(channel_mults)-i-1) in attn_resolutions
-            self.downs.append(DownBlock(in_ch, ch, num_res_blocks, time_emb_dim, attn=attn))
-            in_ch = ch
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from math import log
 
-        # Middle
-        self.mid = nn.Sequential(
-            ResBlock(channels[-1], time_emb_dim),
-            SelfAttention2d(channels[-1]),
-            ResBlock(channels[-1], time_emb_dim)
-        )
+class GammaEncoding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.linear = nn.Linear(dim, dim)
+        self.act = nn.LeakyReLU()
 
-        # Upsampling
-        self.ups = nn.ModuleList()
-        for i, ch in reversed(list(enumerate(channels))):
-            attn = 2**(len(channel_mults)-i-1) in attn_resolutions
-            self.ups.append(UpBlock(ch*2 if i != len(channels)-1 else ch, ch, num_res_blocks, time_emb_dim, attn=attn))
+    def forward(self, noise_level):
+        count = self.dim // 2
+        step = torch.arange(count, dtype=noise_level.dtype, device=noise_level.device) / count
+        encoding = noise_level.unsqueeze(1) * torch.exp(log(1e4) * step.unsqueeze(0))
+        encoding = torch.cat([torch.sin(encoding), torch.cos(encoding)], dim=-1)
+        return self.act(self.linear(encoding))
 
-        self.final = nn.Conv2d(base_channels, out_channels, 3, padding=1)
+class conv_block(nn.Module):
+    def __init__(self, in_c, out_c, time_steps = 1000, activation = "relu", embedding_dims = None):
+        super().__init__()
 
-    def forward(self, x, t):
-        # x: (B, 6, H, W)  (noisy HR + upsampled LR)
-        # t: (B,) or (B, 1)
-        t_emb = get_timestep_embedding(t, self.time_mlp[0].in_features)
-        t_emb = self.time_mlp(t_emb)
-
-        # Down path
-        hs = []
-        h = x
-        for down in self.downs:
-            h = down(h, t_emb)
-            hs.append(h)
-            h = F.avg_pool2d(h, 2)
-
-        # Middle
-        h = self.mid(h, t_emb)
-
-        # Up path
-        for up in self.ups:
-            h = F.interpolate(h, scale_factor=2, mode='nearest')
-            h = torch.cat([h, hs.pop()], dim=1) / math.sqrt(2)
-            h = up(h, t_emb)
-
-        return self.final(h)
+        self.conv1 = nn.Conv2d(in_c, out_c, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_c)
+        
+        self.conv2 = nn.Conv2d(out_c, out_c, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(out_c)
+        self.embedding_dims = embedding_dims if embedding_dims else out_c
+        
+        # self.embedding = nn.Embedding(time_steps, embedding_dim = self.embedding_dims)
+        self.embedding = GammaEncoding(self.embedding_dims)
+        # switch to nn.Embedding if you want to pass in timestep instead; but note that it should be of dtype torch.long
+        self.act = nn.ReLU() if activation == "relu" else nn.SiLU()
+        
+    def forward(self, inputs, time = None):
+        time_embedding = self.embedding(time).view(-1, self.embedding_dims, 1, 1)
+        # print(f"time embed shape => {time_embedding.shape}")
+        x = self.conv1(inputs)
+        x = self.bn1(x)
+        x = self.act(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.act(x)
+        x = x + time_embedding
+        return x
 
 class DiffusionModel(nn.Module):
     def __init__(self, time_steps, 
                  beta_start = 10e-4, 
                  beta_end = 0.02,
                  image_dims = (3, 128, 128)):
+        
         super().__init__()
         self.time_steps = time_steps
         self.image_dims = image_dims
         c, h, w = self.image_dims
         self.img_size, self.input_channels = h, c
-        self.betas = torch.linspace(beta_start, beta_end, self.time_steps)
+        self.betas = cosine_beta_schedule(time_steps)
         self.alphas = 1 - self.betas
         self.alpha_hats = torch.cumprod(self.alphas, dim = -1)
-        # For SR3, input is (noisy HR + upsampled LR)
-        self.model = SR3UNet(
-            in_channels=2*c,
-            out_channels=c,
-            base_channels=128,
-            channel_mults=(1, 2, 4, 8, 8),  # for 128x128 input
-            num_res_blocks=3,
-            attn_resolutions=(16,),  # Only at 16x16
-            time_emb_dim=512
-        )
+        self.model = UNet(input_channels = 2*c, output_channels = c, time_steps = self.time_steps)
 
     def add_noise(self, x, ts):
+        # 'x' and 'ts' are expected to be batched
         noise = torch.randn_like(x)
+        # print(x.shape, noise.shape)
         noised_examples = []
         for i, t in enumerate(ts):
             alpha_hat_t = self.alpha_hats[t]
@@ -188,4 +218,83 @@ class DiffusionModel(nn.Module):
     def forward(self, x, t):
         return self.model(x, t)
 
+class Discriminator(nn.Module):
+    def __init__(self):
+        super(Discriminator, self).__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2),
 
+            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+
+            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2),
+
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(512, 1024, kernel_size=1),
+            nn.LeakyReLU(0.2),
+            nn.Conv2d(1024, 1, kernel_size=1)
+        )
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        return torch.sigmoid(self.net(x).view(batch_size))
+
+def sample(model, lr_img, device = "cuda", val = False):
+    # lr_img is expected to be batched
+    # set to eval mode
+    model.to(device)
+    
+    if val:
+        model.eval()
+        with torch.no_grad():
+        
+            y = torch.randn_like(lr_img, device = device)
+            lr_img = lr_img.to(device)
+            for i, t in enumerate(range(model.time_steps - 1, 0 , -1)):
+                alpha_t, alpha_t_hat, beta_t = \
+                model.alphas[t], model.alpha_hats[t], model.betas[t]
+                t = torch.tensor(t, device = device).long()
+                pred_noise = model(torch.cat([lr_img, y], dim = 1), alpha_t_hat.view(-1).to(device))
+                y = (torch.sqrt(1/alpha_t))*(y - (1-alpha_t)/torch.sqrt(1 - alpha_t_hat) * pred_noise)
+                if t > 1:
+                    noise = torch.randn_like(y)
+                    y = y + torch.sqrt(beta_t) * noise
+        return y
+    
+    y = torch.randn_like(lr_img, device = device)
+    lr_img = lr_img.to(device)
+    for i, t in enumerate(range(model.time_steps - 1, 0 , -1)):
+        alpha_t, alpha_t_hat, beta_t = model.alphas[t], model.alpha_hats[t], model.betas[t]
+
+        t = torch.tensor(t, device = device).long()
+        pred_noise = model(torch.cat([lr_img, y], dim = 1), alpha_t_hat.view(-1).to(device))
+        y = (torch.sqrt(1/alpha_t))*(y - (1-alpha_t)/torch.sqrt(1 - alpha_t_hat) * pred_noise)
+        if t > 1:
+            noise = torch.randn_like(y)
+            y = y + torch.sqrt(beta_t) * noise
+
+    return y

@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from math import log
 from time import time
+import numpy as np
 
 class UNet(nn.Module):
     def __init__(self, input_channels = 3, output_channels = 3, time_steps = 512):
@@ -175,6 +176,15 @@ class conv_block(nn.Module):
         x = x + time_embedding
         return x
 
+def cosine_beta_schedule(timesteps, s=0.008):
+    steps = timesteps + 1
+    x = np.linspace(0, timesteps, steps)
+    alphas_cumprod = np.cos(((x / timesteps) + s) / (1 + s) * np.pi * 0.5) ** 2
+    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+    return torch.from_numpy(np.clip(betas, 0.0001, 0.9999)).float()
+
+
 class DiffusionModel(nn.Module):
     def __init__(self, time_steps, 
                  beta_start = 10e-4, 
@@ -186,7 +196,7 @@ class DiffusionModel(nn.Module):
         self.image_dims = image_dims
         c, h, w = self.image_dims
         self.img_size, self.input_channels = h, c
-        self.betas = torch.linspace(beta_start, beta_end, self.time_steps)
+        self.betas = cosine_beta_schedule(time_steps)
         self.alphas = 1 - self.betas
         self.alpha_hats = torch.cumprod(self.alphas, dim = -1)
         self.model = UNet(input_channels = 2*c, output_channels = c, time_steps = self.time_steps)
