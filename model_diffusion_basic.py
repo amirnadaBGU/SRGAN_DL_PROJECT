@@ -5,14 +5,6 @@ from math import log
 from time import time
 import numpy as np
 
-def cosine_beta_schedule(timesteps, s=0.008):
-    steps = timesteps + 1
-    x = np.linspace(0, timesteps, steps)
-    alphas_cumprod = np.cos(((x / timesteps) + s) / (1 + s) * np.pi * 0.5) ** 2
-    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
-    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
-    return torch.from_numpy(np.clip(betas, 0.0001, 0.9999)).float()
-
 class UNet(nn.Module):
     def __init__(self, input_channels = 3, output_channels = 3, time_steps = 512):
         super().__init__()
@@ -142,18 +134,12 @@ class decoder_block(nn.Module):
         x = self.conv(x, time)
         return x
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from math import log
-
 class GammaEncoding(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
         self.linear = nn.Linear(dim, dim)
         self.act = nn.LeakyReLU()
-
     def forward(self, noise_level):
         count = self.dim // 2
         step = torch.arange(count, dtype=noise_level.dtype, device=noise_level.device) / count
@@ -161,6 +147,7 @@ class GammaEncoding(nn.Module):
         encoding = torch.cat([torch.sin(encoding), torch.cos(encoding)], dim=-1)
         return self.act(self.linear(encoding))
 
+# Double Conv Block
 class conv_block(nn.Module):
     def __init__(self, in_c, out_c, time_steps = 1000, activation = "relu", embedding_dims = None):
         super().__init__()
@@ -188,6 +175,15 @@ class conv_block(nn.Module):
         x = self.act(x)
         x = x + time_embedding
         return x
+
+def cosine_beta_schedule(timesteps, s=0.008):
+    steps = timesteps + 1
+    x = np.linspace(0, timesteps, steps)
+    alphas_cumprod = np.cos(((x / timesteps) + s) / (1 + s) * np.pi * 0.5) ** 2
+    alphas_cumprod = alphas_cumprod / alphas_cumprod[0]
+    betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
+    return torch.from_numpy(np.clip(betas, 0.0001, 0.9999)).float()
+
 
 class DiffusionModel(nn.Module):
     def __init__(self, time_steps, 
@@ -218,83 +214,4 @@ class DiffusionModel(nn.Module):
     def forward(self, x, t):
         return self.model(x, t)
 
-class Discriminator(nn.Module):
-    def __init__(self):
-        super(Discriminator, self).__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, padding=1),
-            nn.LeakyReLU(0.2),
 
-            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(256, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.2),
-
-            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.2),
-
-            nn.AdaptiveAvgPool2d(1),
-            nn.Conv2d(512, 1024, kernel_size=1),
-            nn.LeakyReLU(0.2),
-            nn.Conv2d(1024, 1, kernel_size=1)
-        )
-
-    def forward(self, x):
-        batch_size = x.size(0)
-        return torch.sigmoid(self.net(x).view(batch_size))
-
-def sample(model, lr_img, device = "cuda", val = False):
-    # lr_img is expected to be batched
-    # set to eval mode
-    model.to(device)
-    
-    if val:
-        model.eval()
-        with torch.no_grad():
-        
-            y = torch.randn_like(lr_img, device = device)
-            lr_img = lr_img.to(device)
-            for i, t in enumerate(range(model.time_steps - 1, 0 , -1)):
-                alpha_t, alpha_t_hat, beta_t = \
-                model.alphas[t], model.alpha_hats[t], model.betas[t]
-                t = torch.tensor(t, device = device).long()
-                pred_noise = model(torch.cat([lr_img, y], dim = 1), alpha_t_hat.view(-1).to(device))
-                y = (torch.sqrt(1/alpha_t))*(y - (1-alpha_t)/torch.sqrt(1 - alpha_t_hat) * pred_noise)
-                if t > 1:
-                    noise = torch.randn_like(y)
-                    y = y + torch.sqrt(beta_t) * noise
-        return y
-    
-    y = torch.randn_like(lr_img, device = device)
-    lr_img = lr_img.to(device)
-    for i, t in enumerate(range(model.time_steps - 1, 0 , -1)):
-        alpha_t, alpha_t_hat, beta_t = model.alphas[t], model.alpha_hats[t], model.betas[t]
-
-        t = torch.tensor(t, device = device).long()
-        pred_noise = model(torch.cat([lr_img, y], dim = 1), alpha_t_hat.view(-1).to(device))
-        y = (torch.sqrt(1/alpha_t))*(y - (1-alpha_t)/torch.sqrt(1 - alpha_t_hat) * pred_noise)
-        if t > 1:
-            noise = torch.randn_like(y)
-            y = y + torch.sqrt(beta_t) * noise
-
-    return y
