@@ -23,7 +23,8 @@ from scipy import linalg
 import numpy as np
 from timm import create_model
 from torchmetrics.image.fid import FrechetInceptionDistance
-from model_diffusion import DiffusionModel, Discriminator, sample
+from model_diffusion_basic import DiffusionModel
+from model_diffusion import Discriminator, sample
 from torch.utils.data import Subset
 import cProfile
 
@@ -31,8 +32,8 @@ parser = argparse.ArgumentParser(description='Train Super Resolution Models')
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
-parser.add_argument('--num_epochs', default=200, type=int, help='train epoch number')
-parser.add_argument('--time_steps', default=10, type=int, help='number of diffusion steps')
+parser.add_argument('--num_epochs', default=300, type=int, help='train epoch number')
+parser.add_argument('--time_steps', default=2000, type=int, help='number of diffusion steps')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 
 
@@ -81,8 +82,8 @@ if __name__ == '__main__':
     print('# discriminator parameters:', sum(param.numel() for param in netD.parameters()))
 
 
-    # # Load pretrained generator weights if available
-    # pretrained_path = 'epochs3/ddpm_epoch_4_320.pth'
+    # Load pretrained generator weights if available
+    # pretrained_path = 'epochs3/ddpm_epoch_4_300.pth'
     # if os.path.exists(pretrained_path):
     #     state_dict = torch.load(pretrained_path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
     #     netG.load_state_dict(state_dict)
