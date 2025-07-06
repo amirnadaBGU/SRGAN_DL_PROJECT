@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser(description='Train DDPM Super Resolution Model'
 parser.add_argument('--crop_size', default=128, type=int, help='training images crop size')
 parser.add_argument('--upscale_factor', default=4, type=int, choices=[2, 4, 8],
                     help='super resolution upscale factor')
-parser.add_argument('--num_epochs', default=1000, type=int, help='train epoch number')
+parser.add_argument('--num_epochs', default=300, type=int, help='train epoch number')
 parser.add_argument('--time_steps', default=2000, type=int, help='number of diffusion steps')
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 
@@ -135,7 +135,7 @@ if __name__ == '__main__':
 
                 generated_images = []
                 fid_metric = FrechetInceptionDistance(normalize=True).to(device)
-                for val_lr, val_hr in tqdm(val_batches[-50:], desc='[Val Evaluation]'):
+                for val_lr, val_hr in tqdm(val_batches, desc='[Val Evaluation]'):
                     val_lr = val_lr.to(device).float()
                     val_hr = val_hr.to(device).float()
                     # DDPM sampling: start from noise, condition on LR

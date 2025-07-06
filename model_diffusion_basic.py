@@ -184,7 +184,6 @@ def cosine_beta_schedule(timesteps, s=0.008):
     betas = 1 - (alphas_cumprod[1:] / alphas_cumprod[:-1])
     return torch.from_numpy(np.clip(betas, 0.0001, 0.9999)).float()
 
-
 class DiffusionModel(nn.Module):
     def __init__(self, time_steps, 
                  beta_start = 10e-4, 
@@ -196,7 +195,7 @@ class DiffusionModel(nn.Module):
         self.image_dims = image_dims
         c, h, w = self.image_dims
         self.img_size, self.input_channels = h, c
-        self.betas = cosine_beta_schedule(time_steps)
+        self.betas = torch.linspace(beta_start, beta_end, self.time_steps) # cosine_beta_schedule(time_steps) #cosine_beta_schedule(time_steps) #
         self.alphas = 1 - self.betas
         self.alpha_hats = torch.cumprod(self.alphas, dim = -1)
         self.model = UNet(input_channels = 2*c, output_channels = c, time_steps = self.time_steps)

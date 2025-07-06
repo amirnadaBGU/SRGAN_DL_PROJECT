@@ -62,7 +62,6 @@ class UNet(nn.Module):
         outputs = self.outputs(d4)
         return outputs
 
-
 class AttnBlock(nn.Module):
     def __init__(self, embedding_dims, num_heads = 4) -> None:
         super().__init__()
@@ -116,7 +115,6 @@ class MultiHeadSelfAttention(nn.Module):
         o = o.transpose(1, 2).contiguous().view(bs, img_sz, self.embedding_dims)
         o = self.wo(o)
         return attn_weights, o
-
 
 # Encoder Block for downsampling
 class encoder_block(nn.Module):
