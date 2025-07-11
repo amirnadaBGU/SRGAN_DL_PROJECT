@@ -7,14 +7,13 @@ from torchvision.transforms import InterpolationMode
 from torchvision.transforms import transforms
 import os, cv2
 from torch.utils.data import Dataset, DataLoader
+import torchvision.transforms.functional as TF
 
 def is_image_file(filename):
     return any(filename.endswith(extension) for extension in ['.png', '.jpg', '.jpeg', '.PNG', '.JPG', '.JPEG'])
 
-
 def calculate_valid_crop_size(crop_size, upscale_factor):
     return crop_size - (crop_size % upscale_factor)
-
 
 def train_hr_transform(crop_size):
     return Compose([
@@ -35,7 +34,6 @@ def train_lr_transform(crop_size, upscale_factor):
         ToTensor()
     ])
 
-
 def display_transform():
     return Compose([
         ToPILImage(),
@@ -44,6 +42,11 @@ def display_transform():
         ToTensor()
     ])
 
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in [".png", ".jpg", ".jpeg", ".bmp", ".tif"])
+
+def calculate_valid_crop_size(crop_size, upscale_factor):
+    return crop_size - (crop_size % upscale_factor)
 
 class TrainDatasetFromFolder(Dataset):
     def __init__(self, dataset_dir, crop_size, upscale_factor, diffusion = False, val = False):
@@ -69,7 +72,6 @@ class TrainDatasetFromFolder(Dataset):
     def __len__(self):
         return len(self.image_filenames)
 
-
 class ValDatasetFromFolder(Dataset):
     def __init__(self, dataset_dir, upscale_factor):
         super(ValDatasetFromFolder, self).__init__()
@@ -90,24 +92,39 @@ class ValDatasetFromFolder(Dataset):
     def __len__(self):
         return len(self.image_filenames)
 
-
-class TestDatasetFromFolder(Dataset):
-    def __init__(self, dataset_dir, upscale_factor):
-        super(TestDatasetFromFolder, self).__init__()
-        self.lr_path = dataset_dir + '/SRF_' + str(upscale_factor) + '/data/'
-        self.hr_path = dataset_dir + '/SRF_' + str(upscale_factor) + '/target/'
+class AlignedInferenceDataset(Dataset):
+    def __init__(self, dataset_dir, crop_size, upscale_factor, crop_coords=None, diffusion=False):
+        super().__init__()
+        self.image_filenames = [join(dataset_dir, x) for x in os.listdir(dataset_dir) if is_image_file(x)]
+        crop_size = calculate_valid_crop_size(crop_size, upscale_factor)
+        self.crop_size = crop_size
         self.upscale_factor = upscale_factor
-        self.lr_filenames = [join(self.lr_path, x) for x in listdir(self.lr_path) if is_image_file(x)]
-        self.hr_filenames = [join(self.hr_path, x) for x in listdir(self.hr_path) if is_image_file(x)]
+        self.diffusion = diffusion
+        self.crop_coords = crop_coords  # (i, j, h, w)
+
+        self.to_tensor = TF.to_tensor
+        self.downsample = lambda img: img.resize((crop_size // upscale_factor, crop_size // upscale_factor), Image.BICUBIC)
+        self.upsample = lambda img: img.resize((crop_size, crop_size), Image.BICUBIC)
 
     def __getitem__(self, index):
-        image_name = self.lr_filenames[index].split('/')[-1]
-        lr_image = Image.open(self.lr_filenames[index])
-        w, h = lr_image.size
-        hr_image = Image.open(self.hr_filenames[index])
-        hr_scale = Resize((self.upscale_factor * h, self.upscale_factor * w), interpolation=Image.BICUBIC)
-        hr_restore_img = hr_scale(lr_image)
-        return image_name, ToTensor()(lr_image), ToTensor()(hr_restore_img), ToTensor()(hr_image)
+        img = Image.open(self.image_filenames[index]).convert("RGB")
+
+        # Use provided crop coordinates
+        if self.crop_coords is None:
+            i, j, h, w = TF.RandomCrop.get_params(img, output_size=(self.crop_size, self.crop_size))
+            self.crop_coords = (i, j, h, w)
+        else:
+            i, j, h, w = self.crop_coords
+
+        hr_crop = TF.crop(img, i, j, h, w)
+        lr = self.downsample(hr_crop)
+
+        if self.diffusion:
+            lr = self.upsample(lr)
+
+        return self.to_tensor(lr), self.to_tensor(hr_crop)
 
     def __len__(self):
-        return len(self.lr_filenames)
+        return len(self.image_filenames)
+
+
