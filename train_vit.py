@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 import pytorch_ssim
 from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder, display_transform
-from loss2 import GeneratorLoss
+from loss_vit import GeneratorLoss
 from model import Generator, Discriminator
 import wandb
 

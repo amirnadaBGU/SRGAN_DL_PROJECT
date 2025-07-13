@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 import pytorch_ssim
 from data_utils import TrainDatasetFromFolder, ValDatasetFromFolder
-from model_diffusion_basic import DiffusionModel
+from model_diffusion import DiffusionModel
 import wandb
 
 from torchmetrics.image.fid import FrechetInceptionDistance

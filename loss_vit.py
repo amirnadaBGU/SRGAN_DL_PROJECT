@@ -8,13 +8,10 @@ class GeneratorLoss(nn.Module):
         super(GeneratorLoss, self).__init__()
         self.device = device
 
-        # טוען ViT מאומן מ־timm
         vit = create_model(vit_model_name, pretrained=pretrained)
         vit.eval()
         vit.to(self.device)
 
-        # קובע את השכבה שמתוכה נוציא את ה־features
-        # אפשר לשנות לפי ניסוי. 5 = אחרי כמה Transformer blocks.
         self.feature_layer = feature_layer
         self.vit = vit
 
@@ -22,7 +19,6 @@ class GeneratorLoss(nn.Module):
         for param in self.vit.parameters():
             param.requires_grad = False
 
-        # Normalization כפי שמתאים ל־ViT שאומן על ImageNet
         self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
         self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
@@ -30,8 +26,7 @@ class GeneratorLoss(nn.Module):
         self.tv_loss = TVLoss()
 
     def _extract_features(self, x):
-        
-        # ViT מקבל קלט בגודל 224x224, נבצע resize
+
         x = torch.nn.functional.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
         # נורמליזציה
@@ -39,7 +34,6 @@ class GeneratorLoss(nn.Module):
         x = (x - self.mean) / self.std
 
         # הוצאת features מתוך ViT
-        # לוקחים את הטוקן של ה־[CLS] מתוך השכבה המבוקשת
         features = None
         hooks = []
 
@@ -47,7 +41,6 @@ class GeneratorLoss(nn.Module):
             nonlocal features
             features = output
 
-        # חיבור hook לשכבה המבוקשת
         handle = self.vit.blocks[self.feature_layer].register_forward_hook(hook_fn)
         with torch.no_grad():
             _ = self.vit(x)

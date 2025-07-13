@@ -17,8 +17,8 @@ CROP_SIZE = 128
 UPSCALE_FACTOR = 4
 TIME_STEPS = 2000
 
-DIFFUSION_MODEL_PATH_1 = 'best_models/diffusion/ddpm_epoch_4_320.pth'
-DIFFUSION_MODEL_PATH_2 = 'best_models/diffusion/diffusion_GAN_noise_prediction_loss_epoch_4_135.pth'
+DIFFUSION_MODEL_PATH_1 = 'best_models/diffusion/ddpm_epoch_4_240.pth'
+DIFFUSION_MODEL_PATH_2 = 'best_models/diffusion/netG_diffusion_GAN_epoch_4_245.pth'
 DATA_PATH = 'data/DIV2K_valid_HR'
 
 # ---- Device ---- #
