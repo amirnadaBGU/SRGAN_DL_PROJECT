@@ -220,7 +220,7 @@ if __name__ == '__main__':
             wandb.Image(sample_hr, caption="High Resolution (HR)")
         ]
 
-        # שלח את התמונות ל־WandB
+        # WandB
         wandb.log({
             "example_images": wandb_images
         })
@@ -237,12 +237,4 @@ if __name__ == '__main__':
             "val/SSIM": results['val_ssim'][-1],
         })
 
-        # if epoch % 10 == 0 and epoch != 0:
-        #     out_path = 'statistics/'
-        #     data_frame = pd.DataFrame(
-        #         data={'Loss_D': results['d_loss'], 'Loss_G': results['g_loss'], 'Score_D': results['d_score'],
-        #               'Score_G': results['g_score'], 'train_PSNR': results['train_psnr'], 'train_SSIM': results['train_ssim'],
-        #               'val_PSNR': results['val_psnr'], 'val_SSIM': results['val_ssim']},
-        #         index=range(1, epoch + 1))
-        #     data_frame.to_csv(out_path + 'srf_' + str(UPSCALE_FACTOR) + '_train_results.csv', index_label='Epoch')
     wandb.finish()

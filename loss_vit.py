@@ -15,7 +15,7 @@ class GeneratorLoss(nn.Module):
         self.feature_layer = feature_layer
         self.vit = vit
 
-        # הקפאת כל הפרמטרים של ה־ViT
+        # VIT
         for param in self.vit.parameters():
             param.requires_grad = False
 
@@ -29,11 +29,9 @@ class GeneratorLoss(nn.Module):
 
         x = torch.nn.functional.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
-        # נורמליזציה
-        #TODO CHECK NORMALIZATION
         x = (x - self.mean) / self.std
 
-        # הוצאת features מתוך ViT
+        # ViT
         features = None
         hooks = []
 

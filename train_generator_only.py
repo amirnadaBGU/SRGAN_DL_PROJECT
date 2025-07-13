@@ -267,7 +267,6 @@ if __name__ == '__main__':
             wandb.Image(sample_hr, caption="High Resolution (HR)")
         ]
 
-
         wandb.log({
             "epoch": epoch,
             "train/Loss_D": results['d_loss'][-1],
